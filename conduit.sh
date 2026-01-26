@@ -33,7 +33,7 @@ fi
 
 VERSION="1.0.1"
 CONDUIT_IMAGE="ghcr.io/ssmirr/conduit/conduit:d8522a8"
-INSTALL_DIR="/opt/conduit"
+INSTALL_DIR="${INSTALL_DIR:-/opt/conduit}"
 FORCE_REINSTALL=false
 
 # Colors
@@ -146,6 +146,11 @@ detect_os() {
     fi
     
     log_info "Detected: $OS ($OS_FAMILY family), Package manager: $PKG_MANAGER"
+
+    if command -v podman &>/dev/null && ! command -v docker &>/dev/null; then
+        log_warn "Podman detected. This script is optimized for Docker."
+        log_warn "If installation fails, consider installing 'docker-ce' manually."
+    fi
 }
 
 install_package() {
@@ -154,23 +159,54 @@ install_package() {
     
     case "$PKG_MANAGER" in
         apt)
-            apt-get update -qq 2>/dev/null
-            apt-get install -y -qq "$package" 2>/dev/null
+            # Make update failure non-fatal but log it
+            apt-get update -q || log_warn "apt-get update failed, attempting to install regardless..."
+            if apt-get install -y -q "$package"; then
+                log_success "$package installed successfully"
+            else
+                log_error "Failed to install $package"
+                return 1
+            fi
             ;;
         dnf)
-            dnf install -y -q "$package" 2>/dev/null
+            if dnf install -y -q "$package"; then
+                log_success "$package installed successfully"
+            else
+                log_error "Failed to install $package"
+                return 1
+            fi
             ;;
         yum)
-            yum install -y -q "$package" 2>/dev/null
+            if yum install -y -q "$package"; then
+                log_success "$package installed successfully"
+            else
+                log_error "Failed to install $package"
+                return 1
+            fi
             ;;
         pacman)
-            pacman -Sy --noconfirm "$package" 2>/dev/null
+            if pacman -Sy --noconfirm "$package"; then
+                log_success "$package installed successfully"
+            else
+                log_error "Failed to install $package"
+                return 1
+            fi
             ;;
         zypper)
-            zypper install -y -n "$package" 2>/dev/null
+            if zypper install -y -n "$package"; then
+                log_success "$package installed successfully"
+            else
+                log_error "Failed to install $package"
+                return 1
+            fi
             ;;
         apk)
-            apk add --no-cache "$package" 2>/dev/null
+            if apk add --no-cache "$package"; then
+                log_success "$package installed successfully"
+            else
+                log_error "Failed to install $package"
+                return 1
+            fi
             ;;
         *)
             log_warn "Unknown package manager. Please install $package manually."
@@ -196,28 +232,28 @@ check_dependencies() {
     # Check for basic tools
     if ! command -v awk &>/dev/null; then
         case "$PKG_MANAGER" in
-            apt) install_package gawk ;;
-            apk) install_package gawk ;;
-            *) install_package awk ;;
+            apt) install_package gawk || log_warn "Could not install gawk" ;;
+            apk) install_package gawk || log_warn "Could not install gawk" ;;
+            *) install_package awk || log_warn "Could not install awk" ;;
         esac
     fi
     
     # Check for free command
     if ! command -v free &>/dev/null; then
         case "$PKG_MANAGER" in
-            apt|dnf|yum) install_package procps ;;
-            pacman) install_package procps-ng ;;
-            zypper) install_package procps ;;
-            apk) install_package procps ;;
+            apt|dnf|yum) install_package procps || log_warn "Could not install procps" ;;
+            pacman) install_package procps-ng || log_warn "Could not install procps" ;;
+            zypper) install_package procps || log_warn "Could not install procps" ;;
+            apk) install_package procps || log_warn "Could not install procps" ;;
         esac
     fi
 
     # Check for tput (ncurses)
     if ! command -v tput &>/dev/null; then
         case "$PKG_MANAGER" in
-            apt) install_package ncurses-bin ;;
-            apk) install_package ncurses ;;
-            *) install_package ncurses ;;
+            apt) install_package ncurses-bin || log_warn "Could not install ncurses-bin" ;;
+            apk) install_package ncurses || log_warn "Could not install ncurses" ;;
+            *) install_package ncurses || log_warn "Could not install ncurses" ;;
         esac
     fi
 
@@ -229,18 +265,22 @@ check_dependencies() {
     # Check for GeoIP tools
     if ! command -v geoiplookup &>/dev/null; then
         case "$PKG_MANAGER" in
-            apt) install_package geoip-bin ;;
+            apt) 
+                # geoip-bin is becoming legacy in some Ubuntu versions, but still works in many.
+                # If it fails, we warn but don't stop the whole script if other things work.
+                install_package geoip-bin || log_warn "Could not install geoip-bin. Live peer map may not show countries."
+                ;;
             dnf|yum) 
                 # On RHEL/CentOS
                 if ! rpm -q epel-release &>/dev/null; then
                     log_info "Enabling EPEL repository for GeoIP..."
                     $PKG_MANAGER install -y epel-release &>/dev/null || true
                 fi
-                install_package GeoIP 
+                install_package GeoIP || log_warn "Could not install GeoIP."
                 ;;
-            pacman) install_package geoip ;;
-            zypper) install_package GeoIP ;;
-            apk) install_package geoip ;;
+            pacman) install_package geoip || log_warn "Could not install geoip." ;;
+            zypper) install_package GeoIP || log_warn "Could not install GeoIP." ;;
+            apk) install_package geoip || log_warn "Could not install geoip." ;;
             *) log_warn "Could not install geoiplookup automatically" ;;
         esac
     fi
@@ -413,6 +453,13 @@ install_docker() {
     
     log_info "Installing Docker..."
     
+    # Check OS family for specific requirements
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        log_info "Installing RHEL-specific Docker dependencies..."
+        $PKG_MANAGER install -y -q dnf-plugins-core 2>/dev/null || true
+        dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo 2>/dev/null || true
+    fi
+
     # Alpine
     if [ "$OS_FAMILY" = "alpine" ]; then
         apk add --no-cache docker docker-cli-compose 2>/dev/null
@@ -420,7 +467,11 @@ install_docker() {
         service docker start 2>/dev/null || rc-service docker start 2>/dev/null || true
     else
         # Use official Docker install
-        curl -fsSL https://get.docker.com | sh
+        if ! curl -fsSL https://get.docker.com | sh; then
+            log_error "Official Docker installation script failed."
+            log_info "Try installing docker manually: https://docs.docker.com/engine/install/"
+            return 1
+        fi
         
         # Enable and start Docker
         if [ "$HAS_SYSTEMD" = "true" ]; then
@@ -458,7 +509,14 @@ install_docker() {
 run_conduit() {
     log_info "Starting Conduit container..."
     
-    # Stop existing container
+    # Check for existing conduit containers (any image containing conduit)
+    local existing=$(docker ps -a --filter "ancestor=ghcr.io/ssmirr/conduit/conduit" --format "{{.Names}}")
+    if [ -n "$existing" ] && [ "$existing" != "conduit" ]; then
+        log_warn "Detected other Conduit containers: $existing"
+        log_warn "Running multiple instances may cause port conflicts."
+    fi
+
+    # Stop existing container with our name
     docker rm -f conduit 2>/dev/null || true
     
     # Pull image 
@@ -494,7 +552,7 @@ run_conduit() {
 }
 
 save_settings() {
-    mkdir -p $INSTALL_DIR
+    mkdir -p "$INSTALL_DIR"
     
     # Save settings
     cat > "$INSTALL_DIR/settings.conf" << EOF
@@ -515,7 +573,8 @@ setup_autostart() {
     
     if [ "$HAS_SYSTEMD" = "true" ]; then
         # Systemd-based systems
-        cat > /etc/systemd/system/conduit.service << 'EOF'
+        local docker_path=$(command -v docker)
+        cat > /etc/systemd/system/conduit.service << EOF
 [Unit]
 Description=Psiphon Conduit Service
 After=network.target docker.service
@@ -524,8 +583,8 @@ Requires=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/docker start conduit
-ExecStop=/usr/bin/docker stop conduit
+ExecStart=$docker_path start conduit
+ExecStop=$docker_path stop conduit
 
 [Install]
 WantedBy=multi-user.target
@@ -613,7 +672,10 @@ EOF
 #═══════════════════════════════════════════════════════════════════════
 
 create_management_script() {
-    cat > $INSTALL_DIR/conduit << 'MANAGEMENT'
+    # Generate the management script. 
+    # Note: We use a placeholder for INSTALL_DIR that we'll replace with sed
+    # to avoid complex escaping in the heredoc while keeping it dynamic.
+    cat > "$INSTALL_DIR/conduit" << 'MANAGEMENT'
 #!/bin/bash
 #
 # Psiphon Conduit Manager
@@ -621,7 +683,7 @@ create_management_script() {
 #
 
 VERSION="1.0.1"
-INSTALL_DIR="/opt/conduit"
+INSTALL_DIR="REPLACE_ME_INSTALL_DIR"
 CONDUIT_IMAGE="ghcr.io/ssmirr/conduit/conduit:d8522a8"
 
 # Colors
@@ -957,7 +1019,7 @@ show_peers() {
     
     echo -ne "\033[?25h" # Show cursor
     tput rmcup 2>/dev/null || true
-    rm -f /tmp/conduit_peers_current
+    rm -f /tmp/conduit_peers_current /tmp/conduit_peers_next
     trap - SIGINT SIGTERM
 }
 
@@ -1196,7 +1258,7 @@ change_settings() {
     fi
     
     # Save settings
-    cat > $INSTALL_DIR/settings.conf << EOF
+    cat > "$INSTALL_DIR/settings.conf" << EOF
 MAX_CLIENTS=$MAX_CLIENTS
 BANDWIDTH=$BANDWIDTH
 EOF
@@ -1261,19 +1323,19 @@ uninstall_all() {
     fi
     
     echo ""
-    echo "[INFO] Stopping Conduit container..."
+    echo -e "${BLUE}[INFO]${NC} Stopping Conduit container..."
     docker stop conduit 2>/dev/null || true
     
-    echo "[INFO] Removing Conduit container..."
+    echo -e "${BLUE}[INFO]${NC} Removing Conduit container..."
     docker rm -f conduit 2>/dev/null || true
     
-    echo "[INFO] Removing Conduit Docker image..."
-    docker rmi $CONDUIT_IMAGE 2>/dev/null || true
+    echo -e "${BLUE}[INFO]${NC} Removing Conduit Docker image..."
+    docker rmi "$CONDUIT_IMAGE" 2>/dev/null || true
     
-    echo "[INFO] Removing Conduit data volume..."
+    echo -e "${BLUE}[INFO]${NC} Removing Conduit data volume..."
     docker volume rm conduit-data 2>/dev/null || true
     
-    echo "[INFO] Removing auto-start service..."
+    echo -e "${BLUE}[INFO]${NC} Removing auto-start service..."
     # Systemd
     systemctl stop conduit.service 2>/dev/null || true
     systemctl disable conduit.service 2>/dev/null || true
@@ -1287,8 +1349,8 @@ uninstall_all() {
     chkconfig conduit off 2>/dev/null || true
     rm -f /etc/init.d/conduit
     
-    echo "[INFO] Removing configuration files..."
-    rm -rf /opt/conduit
+    echo -e "${BLUE}[INFO]${NC} Removing configuration files..."
+    rm -rf "$INSTALL_DIR"
     rm -f /usr/local/bin/conduit
     
     echo ""
@@ -1298,8 +1360,7 @@ uninstall_all() {
     echo ""
     echo "Conduit and all related components have been removed."
     echo ""
-    echo "Note: Docker itself was NOT removed. To remove Docker:"
-    echo "  apt-get purge docker-ce docker-ce-cli containerd.io"
+    echo "Note: Docker itself was NOT removed."
     echo ""
 }
 
@@ -1421,10 +1482,14 @@ case "${1:-menu}" in
 esac
 MANAGEMENT
 
-    chmod +x $INSTALL_DIR/conduit
+    # Patch the INSTALL_DIR in the generated script
+    # Use # as delimiter to avoid issues if path contains /
+    sed -i "s#REPLACE_ME_INSTALL_DIR#$INSTALL_DIR#g" "$INSTALL_DIR/conduit"
+    
+    chmod +x "$INSTALL_DIR/conduit"
     # Force create symlink
     rm -f /usr/local/bin/conduit 2>/dev/null || true
-    ln -s $INSTALL_DIR/conduit /usr/local/bin/conduit
+    ln -s "$INSTALL_DIR/conduit" /usr/local/bin/conduit
     
     log_success "Management script installed: conduit"
 }
@@ -1479,11 +1544,10 @@ print_summary() {
 #═══════════════════════════════════════════════════════════════════════
 
 uninstall() {
-    echo -e "${CYAN}"
-    echo "╔═══════════════════════════════════════════════════════════════════╗"
+    echo ""
+    echo -e "${CYAN}╔═══════════════════════════════════════════════════════════════════╗${NC}"
     echo "║                    ⚠️  UNINSTALL CONDUIT                          ║"
     echo "╚═══════════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
     echo ""
     echo "This will completely remove:"
     echo "  • Conduit Docker container"
@@ -1510,7 +1574,7 @@ uninstall() {
     docker rm -f conduit 2>/dev/null || true
     
     log_info "Removing Conduit Docker image..."
-    docker rmi ghcr.io/ssmirr/conduit/conduit:latest 2>/dev/null || true
+    docker rmi "$CONDUIT_IMAGE" 2>/dev/null || true
     
     log_info "Removing Conduit data volume..."
     docker volume rm conduit-data 2>/dev/null || true
@@ -1530,7 +1594,7 @@ uninstall() {
     rm -f /etc/init.d/conduit
     
     log_info "Removing configuration files..."
-    rm -rf /opt/conduit
+    rm -rf "$INSTALL_DIR"
     rm -f /usr/local/bin/conduit
     
     echo ""
@@ -1540,8 +1604,7 @@ uninstall() {
     echo ""
     echo "Conduit and all related components have been removed."
     echo ""
-    echo "Note: Docker itself was NOT removed. To remove Docker:"
-    echo "  apt-get purge docker-ce docker-ce-cli containerd.io"
+    echo "Note: Docker itself was NOT removed."
     echo ""
 }
 
@@ -1610,7 +1673,7 @@ main() {
             1)
                 echo -e "${CYAN}Opening management menu...${NC}"
                 create_management_script >/dev/null 2>&1
-                exec /opt/conduit/conduit menu
+                exec "$INSTALL_DIR/conduit" menu
                 ;;
             2)
                 echo ""
@@ -1661,7 +1724,7 @@ main() {
     
         read -p "View live statistics now? [Y/n] " view_stats < /dev/tty || true
     if [[ ! "$view_stats" =~ ^[Nn] ]]; then
-        /opt/conduit/conduit stats
+        "$INSTALL_DIR/conduit" stats
     fi
 }
 #
