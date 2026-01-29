@@ -2507,6 +2507,11 @@ restart_conduit() {
             echo -e "${YELLOW}✓ ${name} removed (scaled down)${NC}"
         fi
     done
+    # Regenerate tracker script and restart tracker service
+    regenerate_tracker_script
+    if command -v systemctl &>/dev/null && systemctl is-active --quiet conduit-tracker.service 2>/dev/null; then
+        systemctl restart conduit-tracker.service 2>/dev/null || true
+    fi
 }
 
 change_settings() {
