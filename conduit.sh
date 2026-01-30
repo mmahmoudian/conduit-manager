@@ -3989,6 +3989,13 @@ show_settings_menu() {
             echo -e "  8. 📖 About Conduit"
             echo ""
             echo -e "  9. 🔄 Reset tracker data"
+            local tracker_status
+            if is_tracker_active; then
+                tracker_status="${GREEN}Active${NC}"
+            else
+                tracker_status="${RED}Inactive${NC}"
+            fi
+            echo -e "  r. 📡 Restart tracker service  (${tracker_status})"
             echo -e "  t. 📲 Telegram Notifications"
             echo -e ""
             echo -e "  u. 🗑️  Uninstall"
@@ -4061,6 +4068,21 @@ show_settings_menu() {
                     fi
                 done
                 read -n 1 -s -r -p "Press any key to return..." < /dev/tty || true
+                redraw=true
+                ;;
+            r)
+                echo ""
+                echo -ne "  Regenerating tracker script... "
+                regenerate_tracker_script
+                echo -e "${GREEN}done${NC}"
+                echo -ne "  Starting tracker service... "
+                setup_tracker_service
+                if is_tracker_active; then
+                    echo -e "${GREEN}✓ Tracker is now active${NC}"
+                else
+                    echo -e "${RED}✗ Failed to start tracker. Run health check for details.${NC}"
+                fi
+                read -n 1 -s -r -p "  Press any key to return..." < /dev/tty || true
                 redraw=true
                 ;;
             t)
@@ -4314,11 +4336,17 @@ show_menu() {
         fi
     fi
 
-    # Auto-start tracker if not running and containers are up
-    if ! is_tracker_active; then
-        local any_running=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c "^conduit")
-        if [ "${any_running:-0}" -gt 0 ]; then
+    # Auto-start/upgrade tracker if containers are up
+    local any_running=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c "^conduit" 2>/dev/null || true)
+    any_running=${any_running:-0}
+    if [ "$any_running" -gt 0 ] 2>/dev/null; then
+        # Always regenerate script so upgrades get latest code
+        regenerate_tracker_script
+        if ! is_tracker_active; then
             setup_tracker_service
+        else
+            # Restart to pick up new script
+            systemctl restart conduit-tracker.service 2>/dev/null || true
         fi
     fi
 
