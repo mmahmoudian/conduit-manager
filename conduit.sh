@@ -31,7 +31,7 @@ if [ -z "$BASH_VERSION" ]; then
     exit 1
 fi
 
-VERSION="1.1"
+VERSION="1.2-Beta"
 CONDUIT_IMAGE="ghcr.io/ssmirr/conduit/conduit:latest"
 INSTALL_DIR="${INSTALL_DIR:-/opt/conduit}"
 BACKUP_DIR="$INSTALL_DIR/backups"
@@ -679,6 +679,15 @@ run_conduit() {
 
 save_settings_install() {
     mkdir -p "$INSTALL_DIR"
+    # Preserve existing Telegram settings on reinstall
+    local _tg_token="" _tg_chat="" _tg_interval="6" _tg_enabled="false"
+    if [ -f "$INSTALL_DIR/settings.conf" ]; then
+        source "$INSTALL_DIR/settings.conf" 2>/dev/null
+        _tg_token="${TELEGRAM_BOT_TOKEN:-}"
+        _tg_chat="${TELEGRAM_CHAT_ID:-}"
+        _tg_interval="${TELEGRAM_INTERVAL:-6}"
+        _tg_enabled="${TELEGRAM_ENABLED:-false}"
+    fi
     cat > "$INSTALL_DIR/settings.conf" << EOF
 MAX_CLIENTS=$MAX_CLIENTS
 BANDWIDTH=$BANDWIDTH
@@ -688,6 +697,10 @@ DATA_CAP_IFACE=
 DATA_CAP_BASELINE_RX=0
 DATA_CAP_BASELINE_TX=0
 DATA_CAP_PRIOR_USAGE=0
+TELEGRAM_BOT_TOKEN="$_tg_token"
+TELEGRAM_CHAT_ID="$_tg_chat"
+TELEGRAM_INTERVAL=$_tg_interval
+TELEGRAM_ENABLED=$_tg_enabled
 EOF
 
     chmod 600 "$INSTALL_DIR/settings.conf" 2>/dev/null || true
@@ -810,7 +823,7 @@ create_management_script() {
 # Reference: https://github.com/ssmirr/conduit/releases/latest
 #
 
-VERSION="1.1"
+VERSION="1.2-Beta"
 INSTALL_DIR="REPLACE_ME_INSTALL_DIR"
 BACKUP_DIR="$INSTALL_DIR/backups"
 CONDUIT_IMAGE="ghcr.io/ssmirr/conduit/conduit:latest"
@@ -835,6 +848,10 @@ DATA_CAP_IFACE=${DATA_CAP_IFACE:-}
 DATA_CAP_BASELINE_RX=${DATA_CAP_BASELINE_RX:-0}
 DATA_CAP_BASELINE_TX=${DATA_CAP_BASELINE_TX:-0}
 DATA_CAP_PRIOR_USAGE=${DATA_CAP_PRIOR_USAGE:-0}
+TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+TELEGRAM_INTERVAL=${TELEGRAM_INTERVAL:-6}
+TELEGRAM_ENABLED=${TELEGRAM_ENABLED:-false}
 
 # Ensure we're running as root
 if [ "$EUID" -ne 0 ]; then
@@ -1155,7 +1172,7 @@ show_dashboard() {
                         [ "$pct" -gt 100 ] && pct=100
                         local bl=$((pct / 20)); [ "$bl" -lt 1 ] && bl=1; [ "$bl" -gt 5 ] && bl=5
                         local bf=""; local bp=""; for ((bi=0; bi<bl; bi++)); do bf+="█"; done; for ((bi=bl; bi<5; bi++)); do bp+=" "; done
-                        left_lines+=("$(printf "%-11.11s %3d%% \033[32m%s%s\033[0m %5d" "$country" "$pct" "$bf" "$bp" "$est")")
+                        left_lines+=("$(printf "%-11.11s %3d%% \033[32m%s%s\033[0m %5s" "$country" "$pct" "$bf" "$bp" "$(format_number $est)")")
                     done <<< "$snap_data"
                 fi
             fi
@@ -1415,6 +1432,19 @@ format_bytes() {
         awk "BEGIN {printf \"%.2f KB\", $bytes/1024}"
     else
         echo "$bytes B"
+    fi
+}
+
+format_number() {
+    local n=$1
+    if [ -z "$n" ] || [ "$n" -eq 0 ] 2>/dev/null; then
+        echo "0"
+    elif [ "$n" -ge 1000000 ]; then
+        awk "BEGIN {printf \"%.1fM\", $n/1000000}"
+    elif [ "$n" -ge 1000 ]; then
+        awk "BEGIN {printf \"%.1fK\", $n/1000}"
+    else
+        echo "$n"
     fi
 }
 
@@ -1689,6 +1719,12 @@ check_stuck_containers() {
             if docker restart "$cname" >/dev/null 2>&1; then
                 CONTAINER_LAST_RESTART[$cname]=$now
                 CONTAINER_LAST_ACTIVE[$cname]=$now
+                # Send Telegram alert if enabled
+                if [ "$TELEGRAM_ENABLED" = "true" ] && [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+                    local safe_cname=$(escape_telegram_markdown "$cname")
+                    telegram_send_message "⚠️ *Conduit Alert*
+Container ${safe_cname} was stuck (no peers for $((idle_time/3600))h) and has been auto-restarted."
+                fi
             fi
         fi
     done
@@ -2004,7 +2040,7 @@ show_advanced_stats() {
             fi
 
             local tstat="${RED}Off${NC}"; is_tracker_active && tstat="${GREEN}On${NC}"
-            printf "${CYAN}║${NC} Tracker: %b  Clients: ${GREEN}%d${NC}  Unique IPs: ${YELLOW}%d${NC}  In: ${GREEN}%s${NC}  Out: ${YELLOW}%s${NC}\033[K\n" "$tstat" "$total_conn" "$total_active" "$(format_bytes $total_in)" "$(format_bytes $total_out)"
+            printf "${CYAN}║${NC} Tracker: %b  Clients: ${GREEN}%s${NC}  Unique IPs: ${YELLOW}%s${NC}  In: ${GREEN}%s${NC}  Out: ${YELLOW}%s${NC}\033[K\n" "$tstat" "$(format_number $total_conn)" "$(format_number $total_active)" "$(format_bytes $total_in)" "$(format_bytes $total_out)"
 
             # TOP 5 by Unique IPs (from tracker)
             echo -e "${CYAN}╠─── ${CYAN}TOP 5 BY UNIQUE IPs${NC} ${DIM}(tracked)${NC}\033[K"
@@ -2016,7 +2052,7 @@ show_advanced_stats() {
                     local pct=$((peers * 100 / total_conn))
                     local blen=$((pct / 8)); [ "$blen" -lt 1 ] && blen=1; [ "$blen" -gt 14 ] && blen=14
                     local bfill=""; for ((i=0; i<blen; i++)); do bfill+="█"; done
-                    printf "${CYAN}║${NC} %-16.16s %3d%% ${CYAN}%-14s${NC} (%d IPs)\033[K\n" "$country" "$pct" "$bfill" "$peers"
+                    printf "${CYAN}║${NC} %-16.16s %3d%% ${CYAN}%-14s${NC} (%s IPs)\033[K\n" "$country" "$pct" "$bfill" "$(format_number $peers)"
                 done
             elif [ "$total_traffic" -gt 0 ]; then
                 for c in "${!cbw_in[@]}"; do
@@ -2217,7 +2253,7 @@ show_peers() {
                         est_clients=$(( (snap_cnt * total_clients) / snap_total_from_ips ))
                         [ "$est_clients" -eq 0 ] && [ "$snap_cnt" -gt 0 ] && est_clients=1
                     fi
-                    printf " ${GREEN}%-26.26s${NC} %10s %10s/s  %5d/%d${EL}\n" "$country" "$(format_bytes $bytes)" "$speed_str" "$ips_all" "$est_clients"
+                    printf " ${GREEN}%-26.26s${NC} %10s %10s/s  %5s/%s${EL}\n" "$country" "$(format_bytes $bytes)" "$speed_str" "$(format_number $ips_all)" "$(format_number $est_clients)"
                 done < <(for c in "${!cumul_from[@]}"; do echo "${cumul_from[$c]:-0}|$c"; done | sort -t'|' -k1 -nr | head -10)
             else
                 echo -e " ${DIM}Waiting for data...${NC}${EL}"
@@ -2242,7 +2278,7 @@ show_peers() {
                         est_clients=$(( (snap_cnt * total_clients) / snap_total_to_ips ))
                         [ "$est_clients" -eq 0 ] && [ "$snap_cnt" -gt 0 ] && est_clients=1
                     fi
-                    printf " ${YELLOW}%-26.26s${NC} %10s %10s/s  %5d/%d${EL}\n" "$country" "$(format_bytes $bytes)" "$speed_str" "$ips_all" "$est_clients"
+                    printf " ${YELLOW}%-26.26s${NC} %10s %10s/s  %5s/%s${EL}\n" "$country" "$(format_bytes $bytes)" "$speed_str" "$(format_number $ips_all)" "$(format_number $est_clients)"
                 done < <(for c in "${!cumul_to[@]}"; do echo "${cumul_to[$c]:-0}|$c"; done | sort -t'|' -k1 -nr | head -10)
             else
                 echo -e " ${DIM}Waiting for data...${NC}${EL}"
@@ -2872,6 +2908,9 @@ show_logs() {
 }
 
 uninstall_all() {
+    telegram_disable_service
+    rm -f /etc/systemd/system/conduit-telegram.service 2>/dev/null
+    systemctl daemon-reload 2>/dev/null || true
     echo ""
     echo -e "${RED}╔═══════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${RED}║                    ⚠️  UNINSTALL CONDUIT                          ║${NC}"
@@ -3429,6 +3468,10 @@ DATA_CAP_IFACE=$DATA_CAP_IFACE
 DATA_CAP_BASELINE_RX=$DATA_CAP_BASELINE_RX
 DATA_CAP_BASELINE_TX=$DATA_CAP_BASELINE_TX
 DATA_CAP_PRIOR_USAGE=${DATA_CAP_PRIOR_USAGE:-0}
+TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN"
+TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID"
+TELEGRAM_INTERVAL=${TELEGRAM_INTERVAL:-6}
+TELEGRAM_ENABLED=${TELEGRAM_ENABLED:-false}
 EOF
     # Save per-container overrides
     for i in $(seq 1 5); do
@@ -3438,6 +3481,452 @@ EOF
         [ -n "${!bw_var}" ] && echo "${bw_var}=${!bw_var}" >> "$INSTALL_DIR/settings.conf"
     done
     chmod 600 "$INSTALL_DIR/settings.conf" 2>/dev/null || true
+}
+
+# ─── Telegram Bot Functions ───────────────────────────────────────────────────
+
+escape_telegram_markdown() {
+    local text="$1"
+    text="${text//\\/\\\\}"
+    text="${text//\*/\\*}"
+    text="${text//_/\\_}"
+    text="${text//\`/\\\`}"
+    text="${text//\[/\\[}"
+    text="${text//\]/\\]}"
+    echo "$text"
+}
+
+telegram_send_message() {
+    local message="$1"
+    { [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; } && return 1
+    local response
+    response=$(curl -s --max-time 10 --max-filesize 1048576 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+        --data-urlencode "text=$message" \
+        --data-urlencode "parse_mode=Markdown" 2>/dev/null)
+    [ $? -ne 0 ] && return 1
+    echo "$response" | grep -q '"ok":true' && return 0
+    return 1
+}
+
+telegram_test_message() {
+    local interval_label="${TELEGRAM_INTERVAL:-6}"
+    local report=$(telegram_build_report)
+    local message="✅ *Conduit Manager Connected!*
+
+🔗 *What is Psiphon Conduit?*
+You are running a Psiphon relay node that helps people in censored regions access the open internet.
+
+📬 *What this bot sends you every ${interval_label}h:*
+• Container status & uptime
+• Connected peers count
+• Upload & download totals
+• CPU & RAM usage
+• Data cap usage (if set)
+• Top countries being served
+
+⚠️ *Alerts:*
+If a container gets stuck and is auto-restarted, you will receive an immediate alert.
+
+━━━━━━━━━━━━━━━━━━━━
+📊 *Your first report:*
+━━━━━━━━━━━━━━━━━━━━
+
+${report}"
+    telegram_send_message "$message"
+}
+
+telegram_get_chat_id() {
+    local response
+    response=$(curl -s --max-time 10 --max-filesize 1048576 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates" 2>/dev/null)
+    [ -z "$response" ] && return 1
+    # Verify API returned success
+    echo "$response" | grep -q '"ok":true' || return 1
+    # Extract chat id: find "message"..."chat":{"id":NUMBER pattern
+    # Use python if available for reliable JSON parsing, fall back to grep
+    local chat_id=""
+    if command -v python3 &>/dev/null; then
+        chat_id=$(python3 -c "
+import json,sys
+try:
+    d=json.loads(sys.stdin.read())
+    msgs=d.get('result',[])
+    if msgs:
+        print(msgs[-1]['message']['chat']['id'])
+except: pass
+" <<< "$response" 2>/dev/null)
+    fi
+    # Fallback: POSIX-compatible grep extraction
+    if [ -z "$chat_id" ]; then
+        chat_id=$(echo "$response" | grep -o '"chat"[[:space:]]*:[[:space:]]*{[[:space:]]*"id"[[:space:]]*:[[:space:]]*-*[0-9]*' | grep -o -- '-*[0-9]*$' | tail -1 2>/dev/null)
+    fi
+    if [ -n "$chat_id" ]; then
+        # Validate chat_id is numeric (with optional leading minus for groups)
+        if ! echo "$chat_id" | grep -qE '^-?[0-9]+$'; then
+            return 1
+        fi
+        TELEGRAM_CHAT_ID="$chat_id"
+        return 0
+    fi
+    return 1
+}
+
+telegram_build_report() {
+    local report="📊 *Conduit Status Report*"
+    report+=$'\n'
+    report+="🕐 $(date '+%Y-%m-%d %H:%M %Z')"
+    report+=$'\n'
+    report+=$'\n'
+
+    # Container status & uptime (check all containers, use earliest start)
+    local running_count=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c "^conduit" || echo 0)
+    local total=$CONTAINER_COUNT
+    if [ "$running_count" -gt 0 ]; then
+        local earliest_start=""
+        for i in $(seq 1 $CONTAINER_COUNT); do
+            local cname=$(get_container_name $i)
+            local started=$(docker inspect --format='{{.State.StartedAt}}' "$cname" 2>/dev/null | cut -d'.' -f1)
+            if [ -n "$started" ]; then
+                local se=$(date -d "$started" +%s 2>/dev/null || echo 0)
+                if [ -z "$earliest_start" ] || [ "$se" -lt "$earliest_start" ] 2>/dev/null; then
+                    earliest_start=$se
+                fi
+            fi
+        done
+        if [ -n "$earliest_start" ] && [ "$earliest_start" -gt 0 ] 2>/dev/null; then
+            local now=$(date +%s)
+            local up=$((now - earliest_start))
+            local days=$((up / 86400))
+            local hours=$(( (up % 86400) / 3600 ))
+            local mins=$(( (up % 3600) / 60 ))
+            if [ "$days" -gt 0 ]; then
+                report+="⏱ Uptime: ${days}d ${hours}h ${mins}m"
+            else
+                report+="⏱ Uptime: ${hours}h ${mins}m"
+            fi
+            report+=$'\n'
+        fi
+    fi
+    report+="📦 Containers: ${running_count}/${total} running"
+    report+=$'\n'
+
+    # Connected peers (use awk like show_status does)
+    local total_peers=0
+    for i in $(seq 1 $CONTAINER_COUNT); do
+        local cname=$(get_container_name $i)
+        local last_stat=$(docker logs --tail 50 "$cname" 2>&1 | grep "\[STATS\]" | tail -1)
+        local peers=$(echo "$last_stat" | awk '{for(j=1;j<=NF;j++){if($j=="Connected:") print $(j+1)+0}}' | head -1)
+        total_peers=$((total_peers + ${peers:-0}))
+    done
+    report+="👥 Peers: ${total_peers} connected"
+    report+=$'\n'
+
+    # CPU / RAM (normalize CPU by core count like dashboard)
+    local stats=$(get_container_stats)
+    local raw_cpu=$(echo "$stats" | awk '{print $1}')
+    local cores=$(get_cpu_cores)
+    local cpu=$(awk "BEGIN {printf \"%.1f%%\", ${raw_cpu%\%} / $cores}" 2>/dev/null || echo "$raw_cpu")
+    local ram=$(echo "$stats" | awk '{print $2, $3, $4}')
+    cpu=$(escape_telegram_markdown "$cpu")
+    ram=$(escape_telegram_markdown "$ram")
+    report+="🖥 CPU: ${cpu} | RAM: ${ram}"
+    report+=$'\n'
+
+    # Data usage
+    if [ "$DATA_CAP_GB" -gt 0 ] 2>/dev/null; then
+        local usage=$(get_data_usage 2>/dev/null)
+        local used_rx=$(echo "$usage" | awk '{print $1}')
+        local used_tx=$(echo "$usage" | awk '{print $2}')
+        local total_used=$(( ${used_rx:-0} + ${used_tx:-0} + ${DATA_CAP_PRIOR_USAGE:-0} ))
+        local used_gb=$(awk "BEGIN {printf \"%.2f\", $total_used/1073741824}" 2>/dev/null || echo "0")
+        report+="📈 Data: ${used_gb} GB / ${DATA_CAP_GB} GB"
+        report+=$'\n'
+    fi
+
+    # Top countries from cumulative_data (field 3 = upload bytes, matching dashboard)
+    local data_file="$INSTALL_DIR/traffic_stats/cumulative_data"
+    if [ -s "$data_file" ]; then
+        local top_countries
+        top_countries=$(awk -F'|' '{if($1!="" && $3+0>0) bytes[$1]+=$3+0} END{for(c in bytes) print bytes[c]"|"c}' "$data_file" 2>/dev/null | sort -t'|' -k1 -nr | head -3)
+        if [ -n "$top_countries" ]; then
+            report+="🌍 Top countries:"
+            report+=$'\n'
+            while IFS='|' read -r bytes country; do
+                [ -z "$country" ] && continue
+                local safe_country=$(escape_telegram_markdown "$country")
+                local fmt=$(format_bytes "$bytes" 2>/dev/null || echo "${bytes} B")
+                report+="  • ${safe_country} (${fmt})"
+                report+=$'\n'
+            done <<< "$top_countries"
+        fi
+    fi
+
+    # Active clients from tracker_snapshot
+    local snapshot_file="$INSTALL_DIR/traffic_stats/tracker_snapshot"
+    if [ -s "$snapshot_file" ]; then
+        local active_clients=$(wc -l < "$snapshot_file" 2>/dev/null || echo 0)
+        report+="📡 Active clients: ${active_clients}"
+        report+=$'\n'
+    fi
+
+    # Total bandwidth served from cumulative_data
+    if [ -s "$data_file" ]; then
+        local total_bw
+        total_bw=$(awk -F'|' '{s+=$2+0; s+=$3+0} END{printf "%.0f", s}' "$data_file" 2>/dev/null || echo 0)
+        if [ "${total_bw:-0}" -gt 0 ] 2>/dev/null; then
+            local total_bw_fmt=$(format_bytes "$total_bw" 2>/dev/null || echo "${total_bw} B")
+            report+="📊 Total bandwidth served: ${total_bw_fmt}"
+            report+=$'\n'
+        fi
+    fi
+
+    echo "$report"
+}
+
+telegram_generate_notify_script() {
+    cat > "$INSTALL_DIR/conduit-telegram.sh" << 'TGEOF'
+#!/bin/bash
+# Conduit Telegram Notification Service
+# Runs as a systemd service, sends periodic status reports
+
+INSTALL_DIR="/opt/conduit"
+
+[ -f "$INSTALL_DIR/settings.conf" ] && source "$INSTALL_DIR/settings.conf"
+
+# Exit if not configured
+[ "$TELEGRAM_ENABLED" != "true" ] && exit 0
+[ -z "$TELEGRAM_BOT_TOKEN" ] && exit 0
+[ -z "$TELEGRAM_CHAT_ID" ] && exit 0
+
+telegram_send() {
+    local message="$1"
+    curl -s --max-time 10 --max-filesize 1048576 -X POST \
+        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+        --data-urlencode "text=$message" \
+        --data-urlencode "parse_mode=Markdown" >/dev/null 2>&1
+}
+
+escape_md() {
+    local text="$1"
+    text="${text//\\/\\\\}"
+    text="${text//\*/\\*}"
+    text="${text//_/\\_}"
+    text="${text//\`/\\\`}"
+    text="${text//\[/\\[}"
+    text="${text//\]/\\]}"
+    echo "$text"
+}
+
+get_container_name() {
+    local i=$1
+    if [ "$i" -le 1 ]; then
+        echo "conduit"
+    else
+        echo "conduit${i}"
+    fi
+}
+
+get_cpu_cores() {
+    local cores=1
+    if command -v nproc &>/dev/null; then
+        cores=$(nproc)
+    elif [ -f /proc/cpuinfo ]; then
+        cores=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1)
+    fi
+    [ "$cores" -lt 1 ] 2>/dev/null && cores=1
+    echo "$cores"
+}
+
+build_report() {
+    local report="📊 *Conduit Status Report*"
+    report+=$'\n'
+    report+="🕐 $(date '+%Y-%m-%d %H:%M %Z')"
+    report+=$'\n'
+    report+=$'\n'
+
+    # Container status + uptime
+    local running=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c "^conduit" || echo 0)
+    local total=${CONTAINER_COUNT:-1}
+    report+="📦 Containers: ${running}/${total} running"
+    report+=$'\n'
+
+    # Uptime from earliest container
+    local earliest_start=""
+    for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+        local cname=$(get_container_name $i)
+        local started=$(docker inspect --format='{{.State.StartedAt}}' "$cname" 2>/dev/null)
+        [ -z "$started" ] && continue
+        local se=$(date -d "$started" +%s 2>/dev/null || echo 0)
+        if [ -z "$earliest_start" ] || [ "$se" -lt "$earliest_start" ] 2>/dev/null; then
+            earliest_start=$se
+        fi
+    done
+    if [ -n "$earliest_start" ] && [ "$earliest_start" -gt 0 ] 2>/dev/null; then
+        local now=$(date +%s)
+        local diff=$((now - earliest_start))
+        local days=$((diff / 86400))
+        local hours=$(( (diff % 86400) / 3600 ))
+        local mins=$(( (diff % 3600) / 60 ))
+        report+="⏱ Uptime: ${days}d ${hours}h ${mins}m"
+        report+=$'\n'
+    fi
+
+    # Peers
+    local total_peers=0
+    for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+        local cname=$(get_container_name $i)
+        local last_stat=$(docker logs --tail 50 "$cname" 2>&1 | grep "\[STATS\]" | tail -1)
+        local peers=$(echo "$last_stat" | awk '{for(j=1;j<=NF;j++){if($j=="Connected:") print $(j+1)+0}}' | head -1)
+        total_peers=$((total_peers + ${peers:-0}))
+    done
+    report+="👥 Peers: ${total_peers} connected"
+    report+=$'\n'
+
+    # Active unique clients
+    local snapshot_file="$INSTALL_DIR/traffic_stats/tracker_snapshot"
+    if [ -s "$snapshot_file" ]; then
+        local active_clients=$(wc -l < "$snapshot_file" 2>/dev/null || echo 0)
+        report+="👤 Active clients: ${active_clients} unique IPs"
+        report+=$'\n'
+    fi
+
+    # Total bandwidth served (all-time from cumulative_data)
+    local data_file_bw="$INSTALL_DIR/traffic_stats/cumulative_data"
+    if [ -s "$data_file_bw" ]; then
+        local total_bytes=$(awk -F'|' '{s+=$2+$3} END{print s+0}' "$data_file_bw" 2>/dev/null)
+        local total_served=""
+        if [ "${total_bytes:-0}" -gt 0 ] 2>/dev/null; then
+            total_served=$(awk "BEGIN {b=$total_bytes; if(b>1099511627776) printf \"%.2f TB\",b/1099511627776; else if(b>1073741824) printf \"%.2f GB\",b/1073741824; else printf \"%.1f MB\",b/1048576}" 2>/dev/null)
+            report+="📡 Total served: ${total_served}"
+            report+=$'\n'
+        fi
+    fi
+
+    # CPU / RAM
+    local stats=$(docker stats --no-stream --format "{{.CPUPerc}} {{.MemUsage}}" $(docker ps --format '{{.Names}}' 2>/dev/null | grep "^conduit") 2>/dev/null | head -1)
+    local raw_cpu=$(echo "$stats" | awk '{print $1}')
+    local cores=$(get_cpu_cores)
+    local cpu=$(awk "BEGIN {printf \"%.1f%%\", ${raw_cpu%\%} / $cores}" 2>/dev/null || echo "$raw_cpu")
+    local ram=$(echo "$stats" | awk '{print $2, $3, $4}')
+    cpu=$(escape_md "$cpu")
+    ram=$(escape_md "$ram")
+    report+="🖥 CPU: ${cpu} | RAM: ${ram}"
+    report+=$'\n'
+
+    # Data usage
+    if [ "${DATA_CAP_GB:-0}" -gt 0 ] 2>/dev/null; then
+        local iface="${DATA_CAP_IFACE:-eth0}"
+        local rx=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
+        local tx=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
+        local total_used=$(( rx + tx + ${DATA_CAP_PRIOR_USAGE:-0} ))
+        local used_gb=$(awk "BEGIN {printf \"%.2f\", $total_used/1073741824}" 2>/dev/null || echo "0")
+        report+="📈 Data: ${used_gb} GB / ${DATA_CAP_GB} GB"
+        report+=$'\n'
+    fi
+
+    # Top countries
+    local data_file="$INSTALL_DIR/traffic_stats/cumulative_data"
+    if [ -s "$data_file" ]; then
+        local top_countries
+        top_countries=$(awk -F'|' '{if($1!="" && $3+0>0) bytes[$1]+=$3+0} END{for(c in bytes) print bytes[c]"|"c}' "$data_file" 2>/dev/null | sort -t'|' -k1 -nr | head -3)
+        if [ -n "$top_countries" ]; then
+            report+="🌍 Top countries:"
+            report+=$'\n'
+            local total_upload=$(awk -F'|' '{s+=$3+0} END{print s+0}' "$data_file" 2>/dev/null)
+            while IFS='|' read -r bytes country; do
+                [ -z "$country" ] && continue
+                local pct=0
+                [ "$total_upload" -gt 0 ] 2>/dev/null && pct=$(awk "BEGIN {printf \"%.0f\", ($bytes/$total_upload)*100}" 2>/dev/null || echo 0)
+                local safe_country=$(escape_md "$country")
+                local fmt=$(awk "BEGIN {b=$bytes; if(b>1073741824) printf \"%.1f GB\",b/1073741824; else if(b>1048576) printf \"%.1f MB\",b/1048576; else printf \"%.1f KB\",b/1024}" 2>/dev/null)
+                report+="  • ${safe_country}: ${pct}% (${fmt})"
+                report+=$'\n'
+            done <<< "$top_countries"
+        fi
+    fi
+
+    echo "$report"
+}
+
+# Main loop
+elapsed=0
+interval_secs=$(( ${TELEGRAM_INTERVAL:-6} * 3600 ))
+
+while true; do
+    sleep 60
+    elapsed=$((elapsed + 60))
+
+    # Re-read settings
+    [ -f "$INSTALL_DIR/settings.conf" ] && source "$INSTALL_DIR/settings.conf"
+
+    # Exit if disabled
+    [ "$TELEGRAM_ENABLED" != "true" ] && exit 0
+    [ -z "$TELEGRAM_BOT_TOKEN" ] && exit 0
+
+    # Update interval
+    interval_secs=$(( ${TELEGRAM_INTERVAL:-6} * 3600 ))
+
+    if [ "$elapsed" -ge "$interval_secs" ]; then
+        report=$(build_report)
+        telegram_send "$report"
+        elapsed=0
+    fi
+done
+TGEOF
+    chmod 700 "$INSTALL_DIR/conduit-telegram.sh"
+}
+
+setup_telegram_service() {
+    telegram_generate_notify_script
+    if command -v systemctl &>/dev/null; then
+        cat > /etc/systemd/system/conduit-telegram.service << EOF
+[Unit]
+Description=Conduit Telegram Notifications
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash $INSTALL_DIR/conduit-telegram.sh
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable conduit-telegram.service 2>/dev/null || true
+        systemctl restart conduit-telegram.service 2>/dev/null || true
+    fi
+}
+
+telegram_stop_notify() {
+    if command -v systemctl &>/dev/null && [ -f /etc/systemd/system/conduit-telegram.service ]; then
+        systemctl stop conduit-telegram.service 2>/dev/null || true
+    fi
+    # Also clean up legacy PID-based loop if present
+    if [ -f "$INSTALL_DIR/telegram_notify.pid" ]; then
+        local pid=$(cat "$INSTALL_DIR/telegram_notify.pid" 2>/dev/null)
+        if echo "$pid" | grep -qE '^[0-9]+$' && kill -0 "$pid" 2>/dev/null; then
+            kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+        fi
+        rm -f "$INSTALL_DIR/telegram_notify.pid"
+    fi
+}
+
+telegram_start_notify() {
+    telegram_stop_notify
+    if [ "$TELEGRAM_ENABLED" = "true" ] && [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+        setup_telegram_service
+    fi
+}
+
+telegram_disable_service() {
+    if command -v systemctl &>/dev/null && [ -f /etc/systemd/system/conduit-telegram.service ]; then
+        systemctl stop conduit-telegram.service 2>/dev/null || true
+        systemctl disable conduit-telegram.service 2>/dev/null || true
+    fi
 }
 
 show_about() {
@@ -3498,6 +3987,8 @@ show_settings_menu() {
             echo -e "  8. 📖 About Conduit"
             echo ""
             echo -e "  9. 🔄 Reset tracker data"
+            echo -e "  t. 📲 Telegram Notifications"
+            echo -e ""
             echo -e "  u. 🗑️  Uninstall"
             echo -e "  0. ← Back to main menu"
             echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
@@ -3570,6 +4061,10 @@ show_settings_menu() {
                 read -n 1 -s -r -p "Press any key to return..." < /dev/tty || true
                 redraw=true
                 ;;
+            t)
+                show_telegram_menu
+                redraw=true
+                ;;
             u)
                 uninstall_all
                 exit 0
@@ -3584,6 +4079,227 @@ show_settings_menu() {
                 ;;
         esac
     done
+}
+
+show_telegram_menu() {
+    while true; do
+        # Reload settings from disk to reflect any changes
+        [ -f "$INSTALL_DIR/settings.conf" ] && source "$INSTALL_DIR/settings.conf"
+        clear
+        print_header
+        if [ "$TELEGRAM_ENABLED" = "true" ] && [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            # Already configured — show management menu
+            echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
+            echo -e "${CYAN}  TELEGRAM NOTIFICATIONS${NC}"
+            echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
+            echo ""
+            echo -e "  Status: ${GREEN}✓ Enabled${NC} (every ${TELEGRAM_INTERVAL}h)"
+            echo ""
+            echo -e "  1. 📩 Send test message"
+            echo -e "  2. ⏱  Change interval"
+            echo -e "  3. ❌ Disable notifications"
+            echo -e "  4. 🔄 Reconfigure (new bot/chat)"
+            echo -e "  0. ← Back"
+            echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
+            echo ""
+            read -p "  Enter choice: " tchoice < /dev/tty || return
+            case "$tchoice" in
+                1)
+                    echo ""
+                    echo -ne "  Sending test message... "
+                    if telegram_test_message; then
+                        echo -e "${GREEN}✓ Sent!${NC}"
+                    else
+                        echo -e "${RED}✗ Failed. Check your token/chat ID.${NC}"
+                    fi
+                    read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+                    ;;
+                2)
+                    echo ""
+                    echo -e "  Select notification interval:"
+                    echo -e "  1. Every 1 hour"
+                    echo -e "  2. Every 3 hours"
+                    echo -e "  3. Every 6 hours (recommended)"
+                    echo -e "  4. Every 12 hours"
+                    echo -e "  5. Every 24 hours"
+                    echo ""
+                    read -p "  Choice [1-5]: " ichoice < /dev/tty || true
+                    case "$ichoice" in
+                        1) TELEGRAM_INTERVAL=1 ;;
+                        2) TELEGRAM_INTERVAL=3 ;;
+                        3) TELEGRAM_INTERVAL=6 ;;
+                        4) TELEGRAM_INTERVAL=12 ;;
+                        5) TELEGRAM_INTERVAL=24 ;;
+                        *) echo -e "  ${RED}Invalid choice${NC}"; read -n 1 -s -r -p "  Press any key..." < /dev/tty || true; continue ;;
+                    esac
+                    save_settings
+                    telegram_start_notify
+                    echo -e "  ${GREEN}✓ Interval set to every ${TELEGRAM_INTERVAL} hours${NC}"
+                    read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+                    ;;
+                3)
+                    TELEGRAM_ENABLED=false
+                    save_settings
+                    telegram_disable_service
+                    echo -e "  ${GREEN}✓ Telegram notifications disabled${NC}"
+                    read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+                    ;;
+                4)
+                    telegram_setup_wizard
+                    ;;
+                0) return ;;
+            esac
+        elif [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            # Disabled but credentials exist — offer re-enable
+            echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
+            echo -e "${CYAN}  TELEGRAM NOTIFICATIONS${NC}"
+            echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
+            echo ""
+            echo -e "  Status: ${RED}✗ Disabled${NC} (credentials saved)"
+            echo ""
+            echo -e "  1. ✅ Re-enable notifications (every ${TELEGRAM_INTERVAL:-6}h)"
+            echo -e "  2. 🔄 Reconfigure (new bot/chat)"
+            echo -e "  0. ← Back"
+            echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
+            echo ""
+            read -p "  Enter choice: " tchoice < /dev/tty || return
+            case "$tchoice" in
+                1)
+                    TELEGRAM_ENABLED=true
+                    save_settings
+                    telegram_start_notify
+                    echo -e "  ${GREEN}✓ Telegram notifications re-enabled${NC}"
+                    read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+                    ;;
+                2)
+                    telegram_setup_wizard
+                    ;;
+                0) return ;;
+            esac
+        else
+            # Not configured — run wizard
+            telegram_setup_wizard
+            return
+        fi
+    done
+}
+
+telegram_setup_wizard() {
+    # Save and restore variables on Ctrl+C
+    local _saved_token="$TELEGRAM_BOT_TOKEN"
+    local _saved_chatid="$TELEGRAM_CHAT_ID"
+    local _saved_interval="$TELEGRAM_INTERVAL"
+    local _saved_enabled="$TELEGRAM_ENABLED"
+    trap 'TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; trap - SIGINT; echo; return' SIGINT
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════════${NC}"
+    echo -e "              ${BOLD}TELEGRAM NOTIFICATIONS SETUP${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  ${BOLD}Step 1: Create a Telegram Bot${NC}"
+    echo -e "  ${CYAN}─────────────────────────────${NC}"
+    echo -e "  1. Open Telegram and search for ${BOLD}@BotFather${NC}"
+    echo -e "  2. Send ${YELLOW}/newbot${NC}"
+    echo -e "  3. Choose a name (e.g. \"My Conduit Monitor\")"
+    echo -e "  4. Choose a username (e.g. \"my_conduit_bot\")"
+    echo -e "  5. BotFather will give you a token like:"
+    echo -e "     ${YELLOW}123456789:ABCdefGHIjklMNOpqrsTUVwxyz${NC}"
+    echo ""
+    echo -e "  ${BOLD}Recommended:${NC} Send these commands to @BotFather:"
+    echo -e "     ${YELLOW}/setjoingroups${NC} → Disable (prevents adding to groups)"
+    echo -e "     ${YELLOW}/setprivacy${NC}   → Enable (limits message access)"
+    echo ""
+    echo -e "  ${YELLOW}⚠ OPSEC Note:${NC} Enabling Telegram notifications creates"
+    echo -e "  outbound connections to api.telegram.org from this server."
+    echo -e "  This traffic may be visible to your network provider."
+    echo ""
+    read -s -p "  Enter your bot token: " TELEGRAM_BOT_TOKEN < /dev/tty || { trap - SIGINT; TELEGRAM_BOT_TOKEN="$_saved_token"; return; }
+    echo ""
+    # Trim whitespace
+    TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN## }"
+    TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN%% }"
+    if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+        echo -e "  ${RED}No token entered. Setup cancelled.${NC}"
+        read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+        trap - SIGINT; return
+    fi
+
+    # Validate token format
+    if ! echo "$TELEGRAM_BOT_TOKEN" | grep -qE '^[0-9]+:[A-Za-z0-9_-]+$'; then
+        echo -e "  ${RED}Invalid token format. Should be like: 123456789:ABCdefGHI...${NC}"
+        TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"
+        read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+        trap - SIGINT; return
+    fi
+
+    echo ""
+    echo -e "  ${BOLD}Step 2: Get Your Chat ID${NC}"
+    echo -e "  ${CYAN}────────────────────────${NC}"
+    echo -e "  1. Open your new bot in Telegram"
+    echo -e "  2. Send it the message: ${YELLOW}/start${NC}"
+    echo -e "  3. Press Enter here when done..."
+    echo ""
+    read -p "  Press Enter after sending /start to your bot... " < /dev/tty || { trap - SIGINT; TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"; return; }
+
+    echo -ne "  Detecting chat ID... "
+    local attempts=0
+    TELEGRAM_CHAT_ID=""
+    while [ $attempts -lt 3 ] && [ -z "$TELEGRAM_CHAT_ID" ]; do
+        if telegram_get_chat_id; then
+            break
+        fi
+        attempts=$((attempts + 1))
+        sleep 2
+    done
+
+    if [ -z "$TELEGRAM_CHAT_ID" ]; then
+        echo -e "${RED}✗ Could not detect chat ID${NC}"
+        echo -e "  Make sure you sent /start to the bot and try again."
+        TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"
+        read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+        trap - SIGINT; return
+    fi
+    echo -e "${GREEN}✓ Chat ID: ${TELEGRAM_CHAT_ID}${NC}"
+
+    echo ""
+    echo -e "  ${BOLD}Step 3: Notification Interval${NC}"
+    echo -e "  ${CYAN}─────────────────────────────${NC}"
+    echo -e "  1. Every 1 hour"
+    echo -e "  2. Every 3 hours"
+    echo -e "  3. Every 6 hours (recommended)"
+    echo -e "  4. Every 12 hours"
+    echo -e "  5. Every 24 hours"
+    echo ""
+    read -p "  Choice [1-5] (default 3): " ichoice < /dev/tty || true
+    case "$ichoice" in
+        1) TELEGRAM_INTERVAL=1 ;;
+        2) TELEGRAM_INTERVAL=3 ;;
+        4) TELEGRAM_INTERVAL=12 ;;
+        5) TELEGRAM_INTERVAL=24 ;;
+        *) TELEGRAM_INTERVAL=6 ;;
+    esac
+
+    echo ""
+    echo -ne "  Sending test message... "
+    if telegram_test_message; then
+        echo -e "${GREEN}✓ Success!${NC}"
+    else
+        echo -e "${RED}✗ Failed to send. Check your token.${NC}"
+        TELEGRAM_BOT_TOKEN="$_saved_token"; TELEGRAM_CHAT_ID="$_saved_chatid"; TELEGRAM_INTERVAL="$_saved_interval"; TELEGRAM_ENABLED="$_saved_enabled"
+        read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+        trap - SIGINT; return
+    fi
+
+    TELEGRAM_ENABLED=true
+    save_settings
+    telegram_start_notify
+
+    trap - SIGINT
+    echo ""
+    echo -e "  ${GREEN}${BOLD}✓ Telegram notifications enabled!${NC}"
+    echo -e "  You'll receive reports every ${TELEGRAM_INTERVAL} hours."
+    echo ""
+    read -n 1 -s -r -p "  Press any key to return..." < /dev/tty || true
 }
 
 show_menu() {
@@ -3602,6 +4318,16 @@ show_menu() {
         if [ "${any_running:-0}" -gt 0 ]; then
             setup_tracker_service
         fi
+    fi
+
+    # Load settings (Telegram service is only started explicitly by the user via the Telegram menu)
+    [ -f "$INSTALL_DIR/settings.conf" ] && source "$INSTALL_DIR/settings.conf"
+
+    # If the Telegram service is already running, regenerate the script and restart
+    # so it picks up any code changes from a script upgrade
+    if command -v systemctl &>/dev/null && systemctl is-active conduit-telegram.service &>/dev/null; then
+        telegram_generate_notify_script
+        systemctl restart conduit-telegram.service 2>/dev/null || true
     fi
 
     local redraw=true
@@ -4369,6 +5095,9 @@ print_summary() {
 #═══════════════════════════════════════════════════════════════════════
 
 uninstall() {
+    telegram_disable_service
+    rm -f /etc/systemd/system/conduit-telegram.service 2>/dev/null
+    systemctl daemon-reload 2>/dev/null || true
     echo ""
     echo -e "${CYAN}╔═══════════════════════════════════════════════════════════════════╗${NC}"
     echo "║                    ⚠️  UNINSTALL CONDUIT                          "

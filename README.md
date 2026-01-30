@@ -10,7 +10,7 @@
                       M A N A G E R
 ```
 
-![Version](https://img.shields.io/badge/version-1.1-blue)
+![Version](https://img.shields.io/badge/version-1.2--Beta-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Linux-orange)
 ![Docker](https://img.shields.io/badge/Docker-Required-2496ED?logo=docker&logoColor=white)
@@ -18,31 +18,55 @@
 
 A powerful management tool for deploying and managing Psiphon Conduit nodes on Linux servers. Help users access the open internet during network restrictions.
 
-## Quick Install
+## Quick Install (Beta)
 
 ```bash
-curl -sL https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.sh | sudo bash
+curl -sL https://raw.githubusercontent.com/SamNet-dev/conduit-manager/beta-releases/conduit.sh | sudo bash
 ```
 
 Or download and run manually:
 
 ```bash
-wget https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.sh
+wget https://raw.githubusercontent.com/SamNet-dev/conduit-manager/beta-releases/conduit.sh
 sudo bash conduit.sh
 ```
 
-## What's New in v1.1
+> For stable release, use `main` instead of `beta-releases` in the URL above.
 
-- **Multi-Container Support** — Run up to 5 Conduit containers on a single server for higher throughput
-- **Background Traffic Tracker** — Continuous tcpdump-based tracker service with per-country GeoIP stats
-- **Advanced Stats Page** — Live dashboard with top countries by peers, download, upload, and unique IPs (bar charts, auto-refresh)
-- **Live Dashboard Overhaul** — Side-by-side active clients and top upload by country with real-time bars
-- **Per-Container Settings** — Configure max-clients and bandwidth individually for each container
-- **Container Manager** — Add or remove containers on the fly with auto-refreshing status view
-- **Smart Install** — Detects CPU cores and RAM, recommends container count for your hardware
-- **Info & Help Hub** — Multi-page guide covering the tracker, stats, containers, privacy, and about
-- **Service Auto-Recovery** — Automatically restarts failed conduit.service on script launch
-- **Seamless Upgrade** — Existing v1.0.x users can run the new script without reinstalling; old containers are recognized automatically
+## v1.2-Beta Changelog
+
+> This list will grow as more features are added before the full v1.2 release.
+
+**New Features**
+- Telegram bot notifications with guided setup wizard (periodic status reports via Telegram)
+- Systemd-based notification service (survives reboots and TUI exits)
+- Compact number display — large counts show as 16.5K, 1.2M
+- Active clients count in dashboard and Telegram reports
+- Total bandwidth served in reports
+- Timestamps on all Telegram reports
+
+**Bug Fixes**
+- Auto-restart for stuck containers with improved detection
+- False WAITING status in health check for connected containers without stats
+- Container start/stop/restart logic
+- Duplicate country entries in GeoIP data with broader name normalization
+- TUI stability (multiple fixes)
+- Health check edge cases
+- CPU normalization in reports (divide by core count)
+- Peers count consistency across views
+- Telegram markdown escaping (backslash handling)
+- Wizard failure paths now preserve existing config
+- Uninstall cleanup for Telegram service
+- Menu no longer restarts notification loop on every open
+- PID management for background processes
+
+**Security**
+- Silent bot token input (not echoed)
+- Numeric-only chat ID validation
+- Restricted PID file permissions (600)
+- BotFather privacy guidance in setup wizard
+- OPSEC warning for operators in censored regions
+- Curl calls with `--max-filesize` and `--max-time` limits
 
 ## Features
 
@@ -54,12 +78,11 @@ sudo bash conduit.sh
 - **Advanced Stats** — Top countries by connected peers, download, upload, and unique IPs with bar charts
 - **Live Peer Traffic** — Real-time traffic table by country with speed, total bytes, and IP/client counts
 - **Background Tracker** — Continuous traffic monitoring via systemd service with GeoIP resolution
+- **Telegram Notifications** — Optional periodic status reports and alerts via Telegram bot
 - **Per-Container Settings** — Configure max-clients and bandwidth per container
-- **Easy Management** — Powerful CLI commands or interactive menu
 - **Backup & Restore** — Backup and restore your node identity keys
 - **Health Checks** — Comprehensive diagnostics for troubleshooting
-- **Info & Help** — Built-in multi-page guide explaining how everything works
-- **Complete Uninstall** — Clean removal of all components
+- **Complete Uninstall** — Clean removal of all components including Telegram service
 
 ## Supported Distributions
 
@@ -75,102 +98,28 @@ sudo bash conduit.sh
 
 After installation, use the `conduit` command:
 
-### Status & Monitoring
 ```bash
-conduit status       # Show current status and resource usage
-conduit stats        # View live statistics (real-time dashboard)
-conduit logs         # View raw Docker logs
-conduit health       # Run health check diagnostics
-conduit peers        # Live peer traffic by country (GeoIP)
-```
-
-### Rewards
-```bash
-conduit qr           # Show QR code to claim rewards via Ryve app
-```
-
-### Container Management
-```bash
-conduit start        # Start all Conduit containers
-conduit stop         # Stop all Conduit containers
-conduit restart      # Restart all Conduit containers
-conduit update       # Update to the latest Conduit image
-```
-
-### Configuration
-```bash
-conduit settings     # Change max-clients and bandwidth per container
 conduit menu         # Open interactive management menu
-```
-
-### Backup & Restore
-```bash
-conduit backup       # Backup your node identity keys
-conduit restore      # Restore node identity from backup
-```
-
-### Maintenance
-```bash
+conduit status       # Show current status
+conduit stats        # Live statistics dashboard
+conduit peers        # Live peer traffic by country
+conduit start        # Start all containers
+conduit stop         # Stop all containers
+conduit restart      # Restart all containers
+conduit update       # Update Conduit image
+conduit backup       # Backup node identity keys
+conduit restore      # Restore from backup
+conduit qr           # Show QR code for rewards
+conduit health       # Run health diagnostics
 conduit uninstall    # Remove all components
-conduit version      # Show version information
-conduit help         # Show help message
 ```
 
-## Interactive Menu
-
-The interactive menu (`conduit menu`) provides access to all features:
-
-| Option | Description |
-|--------|-------------|
-| **1** | View status dashboard — real-time stats with active clients and top upload by country |
-| **2** | Live connection stats — streaming stats from Docker logs |
-| **3** | View logs — raw Docker log output |
-| **4** | Live peers by country — per-country traffic table with speed and client counts |
-| **5** | Start Conduit |
-| **6** | Stop Conduit |
-| **7** | Restart Conduit |
-| **8** | Update Conduit image |
-| **9** | Settings & Tools — max-clients, bandwidth, QR code, backup, restore, health check, uninstall |
-| **c** | Manage containers — add or remove containers (up to 5) |
-| **a** | Advanced stats — top 5 charts for peers, download, upload, unique IPs |
-| **i** | Info & Help — multi-page guide with tracker, stats, containers, privacy, about |
-| **0** | Exit |
-
-## Configuration Options
+## Configuration
 
 | Option | Default | Range | Description |
 |--------|---------|-------|-------------|
-| `max-clients` | 200 | 1–1000 | Maximum concurrent proxy clients per container |
-| `bandwidth` | 5 | 1–40, -1 | Bandwidth limit per peer (Mbps). Use -1 for unlimited. |
-
-**Recommended values based on server hardware:**
-
-| CPU Cores | RAM | Recommended Containers | Max Clients (per container) |
-|-----------|-----|------------------------|-----------------------------|
-| 1 Core | < 1 GB | 1 | 100 |
-| 2 Cores | 2 GB | 1–2 | 200 |
-| 4 Cores | 4 GB+ | 2–3 | 400 |
-| 8+ Cores | 8 GB+ | 3–5 | 800 |
-
-## Installation Options
-
-```bash
-# Standard install
-sudo bash conduit.sh
-
-# Force reinstall
-sudo bash conduit.sh --reinstall
-
-# Uninstall everything
-sudo bash conduit.sh --uninstall
-
-# Show help
-sudo bash conduit.sh --help
-```
-
-## Upgrading from v1.0.x
-
-Just run the new script. When prompted, select **"Open management menu"** — your existing container is recognized automatically. No reinstall needed. The background tracker service starts when you next start/restart from the menu.
+| `max-clients` | 200 | 1–1000 | Max concurrent clients per container |
+| `bandwidth` | 5 | 1–40, -1 | Bandwidth limit per peer (Mbps). -1 for unlimited |
 
 ## Requirements
 
@@ -179,210 +128,23 @@ Just run the new script. When prompted, select **"Open management menu"** — yo
 - Internet connection
 - Minimum 512MB RAM (1GB+ recommended for multi-container)
 
-## How It Works
+## Upgrading
 
-1. **Detection** — Identifies your Linux distribution and init system
-2. **Docker Setup** — Installs Docker if not present
-3. **Hardware Check** — Detects CPU/RAM and recommends container count
-4. **Container Deployment** — Pulls and runs the official Psiphon Conduit image
-5. **Auto-Start Configuration** — Sets up systemd/OpenRC/SysVinit service
-6. **Tracker Service** — Starts background traffic tracker with GeoIP resolution
-7. **CLI Installation** — Creates the `conduit` management command
+Just run the install command above. When prompted, select **"Open management menu"** — existing containers are recognized automatically. Telegram settings are preserved across upgrades.
 
 ## Claim Rewards (OAT Tokens)
 
-Conduit node operators can earn OAT tokens for contributing to the Psiphon network. To claim rewards:
-
-1. **Install the Ryve app** on your phone 
-2. **Create a crypto wallet** within the app
-3. **Link your Conduit containers** by scanning the QR code:
-   - From the menu: Select Settings & Tools **Option 6 → Show QR Code & Conduit ID**
-   - From Manage Containers: press **[q]** to display QR code
-   - CLI: `conduit qr`
-4. **Scan the QR code** with the Ryve app to link your node
-5. **Monitor & earn** — the app shows your last 48 hours of connection activity and OAT token rewards
-
-> Each container has its own unique Conduit ID and QR code. If running multiple containers, you'll need to link each one separately.
+1. Install the **Ryve app** on your phone
+2. Create a **crypto wallet** within the app
+3. Run `conduit qr` or use the menu to show your QR code
+4. Scan with Ryve to link your node and start earning
 
 ## Security
 
-- **Secure Backups**: Node identity keys are stored with restricted permissions (600)
+- **Secure Backups**: Node identity keys stored with restricted permissions (600)
 - **No Telemetry**: The manager collects no data and sends nothing externally
 - **Local Tracking Only**: Traffic stats are stored locally and never transmitted
-
----
-
-<div dir="rtl">
-
-# راهنمای فارسی - مدیریت کاندوییت
-
-ابزار قدرتمند برای راه‌اندازی و مدیریت نود سایفون کاندوییت روی سرورهای لینوکس. به کاربران کمک کنید تا در زمان محدودیت‌های اینترنتی به اینترنت آزاد دسترسی داشته باشند.
-
-## نصب سریع
-
-دستور زیر را در ترمینال سرور اجرا کنید:
-
-```bash
-curl -sL https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.sh | sudo bash
-```
-
-یا دانلود و اجرای دستی:
-
-```bash
-wget https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.sh
-sudo bash conduit.sh
-```
-
-## تازه‌های نسخه 1.1
-
-- **پشتیبانی از چند کانتینر** — اجرای تا ۵ کانتینر روی یک سرور برای ظرفیت بیشتر
-- **ردیاب ترافیک پس‌زمینه** — سرویس ردیابی مداوم با آمار جغرافیایی به تفکیک کشور
-- **صفحه آمار پیشرفته** — داشبورد زنده با نمودار میله‌ای برای برترین کشورها
-- **داشبورد بازطراحی شده** — نمایش کلاینت‌های فعال و آپلود برتر به تفکیک کشور
-- **تنظیمات هر کانتینر** — پیکربندی جداگانه حداکثر کاربران و پهنای باند
-- **مدیریت کانتینرها** — اضافه یا حذف کانتینر به صورت آنی
-- **نصب هوشمند** — تشخیص CPU و RAM و پیشنهاد تعداد کانتینر مناسب
-- **بخش راهنما** — راهنمای چندصفحه‌ای شامل ردیاب، آمار، کانتینرها، حریم خصوصی و درباره ما
-- **بازیابی خودکار سرویس** — ریستارت خودکار سرویس در صورت خرابی
-- **ارتقا بدون نصب مجدد** — کاربران نسخه قبلی بدون نیاز به نصب مجدد می‌توانند آپدیت کنند
-
-## ویژگی‌ها
-
-- **نصب با یک کلیک** — داکر و تمام موارد مورد نیاز به صورت خودکار نصب می‌شود
-- **مقیاس‌پذیری چند کانتینره** — اجرای ۱ تا ۵ کانتینر برای حداکثر استفاده از سرور
-- **پشتیبانی از توزیع‌های مختلف** — اوبونتو، دبیان، سنت‌اواس، فدورا، آرچ، آلپاین
-- **راه‌اندازی خودکار** — پس از ریستارت سرور، سرویس به صورت خودکار اجرا می‌شود
-- **داشبورد زنده** — نمایش لحظه‌ای وضعیت، تعداد کاربران، مصرف CPU و RAM
-- **آمار پیشرفته** — نمودار میله‌ای برترین کشورها بر اساس اتصال، دانلود، آپلود و IP
-- **مانیتورینگ ترافیک** — جدول لحظه‌ای ترافیک بر اساس کشور با سرعت و تعداد کلاینت
-- **ردیاب پس‌زمینه** — سرویس ردیابی مداوم ترافیک با تشخیص جغرافیایی
-- **تنظیمات هر کانتینر** — پیکربندی حداکثر کاربران و پهنای باند برای هر کانتینر
-- **مدیریت آسان** — دستورات قدرتمند CLI یا منوی تعاملی
-- **پشتیبان‌گیری و بازیابی** — پشتیبان‌گیری و بازیابی کلیدهای هویت نود
-- **بررسی سلامت** — تشخیص جامع برای عیب‌یابی
-- **راهنما و اطلاعات** — راهنمای چندصفحه‌ای داخلی
-- **حذف کامل** — پاکسازی تمام فایل‌ها و تنظیمات
-
-## دستورات CLI
-
-### وضعیت و مانیتورینگ
-```bash
-conduit status       # نمایش وضعیت و مصرف منابع
-conduit stats        # داشبورد زنده (لحظه‌ای)
-conduit logs         # لاگ‌های داکر
-conduit health       # بررسی سلامت سیستم
-conduit peers        # ترافیک بر اساس کشور (GeoIP)
-```
-
-### پاداش
-```bash
-conduit qr           # نمایش QR کد برای دریافت پاداش از اپلیکیشن Ryve
-```
-
-### مدیریت کانتینر
-```bash
-conduit start        # شروع تمام کانتینرها
-conduit stop         # توقف تمام کانتینرها
-conduit restart      # ریستارت تمام کانتینرها
-conduit update       # به‌روزرسانی به آخرین نسخه
-```
-
-### پیکربندی
-```bash
-conduit settings     # تغییر تنظیمات هر کانتینر
-conduit menu         # منوی تعاملی
-```
-
-### پشتیبان‌گیری و بازیابی
-```bash
-conduit backup       # پشتیبان‌گیری از کلیدهای نود
-conduit restore      # بازیابی کلیدهای نود از پشتیبان
-```
-
-### نگهداری
-```bash
-conduit uninstall    # حذف کامل
-conduit version      # نمایش نسخه
-conduit help         # راهنما
-```
-
-## منوی تعاملی
-
-| گزینه | توضیحات |
-|-------|---------|
-| **1** | داشبورد وضعیت — آمار لحظه‌ای با کلاینت‌های فعال و آپلود برتر |
-| **2** | آمار زنده اتصال — استریم آمار از لاگ داکر |
-| **3** | مشاهده لاگ — خروجی لاگ داکر |
-| **4** | ترافیک زنده به تفکیک کشور — جدول ترافیک با سرعت و تعداد کلاینت |
-| **5** | شروع کاندوییت |
-| **6** | توقف کاندوییت |
-| **7** | ریستارت کاندوییت |
-| **8** | به‌روزرسانی ایمیج |
-| **9** | تنظیمات و ابزارها — پهنای باند، QR کد، پشتیبان‌گیری، بازیابی، بررسی سلامت، حذف نصب |
-| **c** | مدیریت کانتینرها — اضافه یا حذف (تا ۵) |
-| **a** | آمار پیشرفته — نمودار برترین کشورها |
-| **i** | راهنما — توضیحات ردیاب، آمار، کانتینرها، حریم خصوصی |
-| **0** | خروج |
-
-## تنظیمات
-
-| گزینه | پیش‌فرض | محدوده | توضیحات |
-|-------|---------|--------|---------|
-| `max-clients` | 200 | ۱–۱۰۰۰ | حداکثر کاربران همزمان برای هر کانتینر |
-| `bandwidth` | 5 | ۱–۴۰ یا ۱- | محدودیت پهنای باند (Mbps). برای نامحدود ۱- وارد کنید. |
-
-**مقادیر پیشنهادی بر اساس سخت‌افزار سرور:**
-
-| پردازنده | رم | کانتینر پیشنهادی | حداکثر کاربران (هر کانتینر) |
-|----------|-----|-------------------|----------------------------|
-| ۱ هسته | کمتر از ۱ گیگ | ۱ | ۱۰۰ |
-| ۲ هسته | ۲ گیگ | ۱–۲ | ۲۰۰ |
-| ۴ هسته | ۴ گیگ+ | ۲–۳ | ۴۰۰ |
-| ۸+ هسته | ۸ گیگ+ | ۳–۵ | ۸۰۰ |
-
-## ارتقا از نسخه 1.0.x
-
-فقط اسکریپت جدید را اجرا کنید. وقتی سوال پرسیده شد، گزینه **«Open management menu»** را انتخاب کنید. کانتینر موجود شما به صورت خودکار شناسایی می‌شود. نیازی به نصب مجدد نیست.
-
-## پیش‌نیازها
-
-- سرور لینوکس
-- دسترسی root یا sudo
-- اتصال اینترنت
-- حداقل ۵۱۲ مگابایت رم (۱ گیگ+ برای چند کانتینر پیشنهاد می‌شود)
-
-## نحوه عملکرد
-
-1. **تشخیص** — شناسایی توزیع لینوکس و سیستم init
-2. **نصب داکر** — در صورت نبود، داکر نصب می‌شود
-3. **بررسی سخت‌افزار** — تشخیص CPU و RAM و پیشنهاد تعداد کانتینر
-4. **راه‌اندازی کانتینر** — دانلود و اجرای ایمیج رسمی سایفون
-5. **پیکربندی سرویس** — تنظیم سرویس خودکار (systemd/OpenRC/SysVinit)
-6. **سرویس ردیاب** — شروع ردیاب ترافیک پس‌زمینه
-7. **نصب CLI** — ایجاد دستور مدیریت `conduit`
-
-## دریافت پاداش (توکن OAT)
-
-اپراتورهای نود کاندوییت می‌توانند با مشارکت در شبکه سایفون توکن OAT کسب کنند. مراحل دریافت پاداش:
-
-1. **اپلیکیشن Ryve** را روی گوشی نصب کنید
-2. **یک کیف پول کریپتو** در اپلیکیشن بسازید
-3. **کانتینرهای خود را لینک کنید** با اسکن QR کد:
-   - از منو تنظیمات: **گزینه ۶ ← نمایش QR کد و شناسه کاندوییت**
-   - از مدیریت کانتینرها: کلید **[q]** را بزنید
-   - CLI: `conduit qr`
-4. **QR کد را اسکن کنید** با اپلیکیشن Ryve تا نود شما لینک شود
-5. **مانیتور و کسب درآمد** — اپلیکیشن فعالیت ۴۸ ساعت اخیر و توکن‌های OAT را نمایش می‌دهد
-
-> هر کانتینر شناسه و QR کد منحصر به فرد خود را دارد. اگر چند کانتینر اجرا می‌کنید، باید هر کدام را جداگانه لینک کنید.
-
-## امنیت
-
-- **پشتیبان‌گیری امن**: کلیدهای هویت نود با دسترسی محدود (600) ذخیره می‌شوند
-- **بدون تلمتری**: هیچ داده‌ای جمع‌آوری یا ارسال نمی‌شود
-- **ردیابی محلی**: آمار ترافیک فقط به صورت محلی ذخیره شده و هرگز ارسال نمی‌شود
-
-</div>
+- **Telegram Optional**: Bot notifications are opt-in only, zero resources used if disabled
 
 ---
 
@@ -393,6 +155,8 @@ MIT License
 ## Contributing
 
 Pull requests welcome. For major changes, open an issue first.
+
+This is a **beta release** — please report any issues.
 
 ## Links
 
