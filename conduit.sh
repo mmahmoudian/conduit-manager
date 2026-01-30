@@ -646,6 +646,12 @@ run_conduit() {
         docker run --rm -v "${vname}:/home/conduit/data" alpine \
             sh -c "chown -R 1000:1000 /home/conduit/data" 2>/dev/null || true
 
+        local resource_args=""
+        local cpus=$(get_container_cpus $i)
+        local mem=$(get_container_memory $i)
+        [ -n "$cpus" ] && resource_args+="--cpus $cpus "
+        [ -n "$mem" ] && resource_args+="--memory $mem "
+        # shellcheck disable=SC2086
         docker run -d \
             --name "$cname" \
             --restart unless-stopped \
@@ -653,6 +659,7 @@ run_conduit() {
             --log-opt max-file=3 \
             -v "${vname}:/home/conduit/data" \
             --network host \
+            $resource_args \
             "$CONDUIT_IMAGE" \
             start --max-clients "$MAX_CLIENTS" --bandwidth "$BANDWIDTH" --stats-file
 
@@ -954,16 +961,36 @@ get_container_bandwidth() {
     echo "${val:-$BANDWIDTH}"
 }
 
+get_container_cpus() {
+    local idx=${1:-1}
+    local var="CPUS_${idx}"
+    local val="${!var}"
+    echo "${val:-${DOCKER_CPUS:-}}"
+}
+
+get_container_memory() {
+    local idx=${1:-1}
+    local var="MEMORY_${idx}"
+    local val="${!var}"
+    echo "${val:-${DOCKER_MEMORY:-}}"
+}
+
 run_conduit_container() {
     local idx=${1:-1}
     local name=$(get_container_name $idx)
     local vol=$(get_volume_name $idx)
     local mc=$(get_container_max_clients $idx)
     local bw=$(get_container_bandwidth $idx)
+    local cpus=$(get_container_cpus $idx)
+    local mem=$(get_container_memory $idx)
     # Remove any existing container with the same name to avoid conflicts
     if docker ps -a 2>/dev/null | grep -q "[[:space:]]${name}$"; then
         docker rm -f "$name" 2>/dev/null || true
     fi
+    local resource_args=""
+    [ -n "$cpus" ] && resource_args+="--cpus $cpus "
+    [ -n "$mem" ] && resource_args+="--memory $mem "
+    # shellcheck disable=SC2086
     docker run -d \
         --name "$name" \
         --restart unless-stopped \
@@ -971,6 +998,7 @@ run_conduit_container() {
         --log-opt max-file=3 \
         -v "${vol}:/home/conduit/data" \
         --network host \
+        $resource_args \
         "$CONDUIT_IMAGE" \
         start --max-clients "$mc" --bandwidth "$bw" --stats-file
 }
@@ -1940,16 +1968,23 @@ show_advanced_stats() {
 
             echo -e "${CYAN}║${NC} ${GREEN}CONTAINER${NC}  ${DIM}|${NC}  ${YELLOW}NETWORK${NC}  ${DIM}|${NC}  ${MAGENTA}TRACKER${NC}\033[K"
 
-            # Single docker stats call for all running containers
+            # Fetch docker stats and all container logs in parallel
             local adv_running_names=""
+            local _adv_tmpdir="/tmp/.conduit_adv_$$"
+            rm -rf "$_adv_tmpdir"; mkdir -p "$_adv_tmpdir"
             for ci in $(seq 1 $CONTAINER_COUNT); do
                 local cname=$(get_container_name $ci)
-                echo "$docker_ps_cache" | grep -q "^${cname}$" && adv_running_names+=" $cname"
+                if echo "$docker_ps_cache" | grep -q "^${cname}$"; then
+                    adv_running_names+=" $cname"
+                    ( docker logs --tail 30 "$cname" 2>&1 | grep "\[STATS\]" | tail -1 > "$_adv_tmpdir/logs_${ci}" ) &
+                fi
             done
             local adv_all_stats=""
             if [ -n "$adv_running_names" ]; then
-                adv_all_stats=$(docker stats --no-stream --format "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}" $adv_running_names 2>/dev/null)
+                ( docker stats --no-stream --format "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}" $adv_running_names > "$_adv_tmpdir/stats" 2>/dev/null ) &
             fi
+            wait
+            [ -f "$_adv_tmpdir/stats" ] && adv_all_stats=$(cat "$_adv_tmpdir/stats")
 
             for ci in $(seq 1 $CONTAINER_COUNT); do
                 local cname=$(get_container_name $ci)
@@ -1972,7 +2007,8 @@ show_advanced_stats() {
                     fi
                     [ -z "$first_mem_limit" ] && first_mem_limit=$(echo "$stats" | cut -d'|' -f3 | awk -F'/' '{print $2}' | xargs)
 
-                    local logs=$(docker logs --tail 50 "$cname" 2>&1 | grep "\[STATS\]" | tail -1)
+                    local logs=""
+                    [ -f "$_adv_tmpdir/logs_${ci}" ] && logs=$(cat "$_adv_tmpdir/logs_${ci}")
                     local conn=$(echo "$logs" | sed -n 's/.*Connected:[[:space:]]*\([0-9]*\).*/\1/p')
                     [[ "$conn" =~ ^[0-9]+$ ]] && total_conn=$((total_conn + conn))
 
@@ -2005,6 +2041,7 @@ show_advanced_stats() {
                     fi
                 fi
             done
+            rm -rf "$_adv_tmpdir"
 
             if [ "$container_count" -gt 0 ]; then
                 local cpu_display="${total_cpu}%"
@@ -2203,17 +2240,26 @@ show_peers() {
                 done < "$persist_dir/cumulative_ips"
             fi
 
-            # Get actual connected clients from docker logs
+            # Get actual connected clients from docker logs (parallel)
             local total_clients=0
             local docker_ps_cache=$(docker ps --format '{{.Names}}' 2>/dev/null)
+            local _peer_tmpdir="/tmp/.conduit_peer_$$"
+            rm -rf "$_peer_tmpdir"; mkdir -p "$_peer_tmpdir"
             for ci in $(seq 1 $CONTAINER_COUNT); do
                 local cname=$(get_container_name $ci)
                 if echo "$docker_ps_cache" | grep -q "^${cname}$"; then
-                    local logs=$(docker logs --tail 50 "$cname" 2>&1 | grep "\[STATS\]" | tail -1)
+                    ( docker logs --tail 30 "$cname" 2>&1 | grep "\[STATS\]" | tail -1 > "$_peer_tmpdir/logs_${ci}" ) &
+                fi
+            done
+            wait
+            for ci in $(seq 1 $CONTAINER_COUNT); do
+                if [ -f "$_peer_tmpdir/logs_${ci}" ]; then
+                    local logs=$(cat "$_peer_tmpdir/logs_${ci}")
                     local conn=$(echo "$logs" | sed -n 's/.*Connected:[[:space:]]*\([0-9]*\).*/\1/p')
                     [[ "$conn" =~ ^[0-9]+$ ]] && total_clients=$((total_clients + conn))
                 fi
             done
+            rm -rf "$_peer_tmpdir"
 
             echo -e "${EL}"
 
@@ -2369,6 +2415,9 @@ show_status() {
     local total_connected=0
     local uptime=""
 
+    # Fetch all container logs in parallel
+    local _st_tmpdir="/tmp/.conduit_st_$$"
+    rm -rf "$_st_tmpdir"; mkdir -p "$_st_tmpdir"
     for i in $(seq 1 $CONTAINER_COUNT); do
         local cname=$(get_container_name $i)
         _c_running[$i]=false
@@ -2380,9 +2429,15 @@ show_status() {
         if echo "$docker_ps_cache" | grep -q "[[:space:]]${cname}$"; then
             _c_running[$i]=true
             running_count=$((running_count + 1))
-            local logs=$(docker logs --tail 50 "$cname" 2>&1 | grep "STATS" | tail -1)
+            ( docker logs --tail 30 "$cname" 2>&1 | grep "\[STATS\]" | tail -1 > "$_st_tmpdir/logs_${i}" ) &
+        fi
+    done
+    wait
+
+    for i in $(seq 1 $CONTAINER_COUNT); do
+        if [ "${_c_running[$i]}" = true ] && [ -f "$_st_tmpdir/logs_${i}" ]; then
+            local logs=$(cat "$_st_tmpdir/logs_${i}")
             if [ -n "$logs" ]; then
-                # Single awk to extract all 5 fields, pipe-delimited
                 IFS='|' read -r c_connecting c_connected c_up_val c_down_val c_uptime_val <<< $(echo "$logs" | awk '{
                     cing=0; conn=0; up=""; down=""; ut=""
                     for(j=1;j<=NF;j++){
@@ -2406,6 +2461,7 @@ show_status() {
             fi
         fi
     done
+    rm -rf "$_st_tmpdir"
     local connecting=$total_connecting
     local connected=$total_connected
     # Export for parent function to reuse (avoids duplicate docker logs calls)
@@ -2460,18 +2516,27 @@ show_status() {
     fi
 
     if [ "$running_count" -gt 0 ]; then
-        
-        # Get Resource Stats
-        local stats=$(get_container_stats)
-        
+
+        # Run all 3 resource stat calls in parallel
+        local _rs_tmpdir="/tmp/.conduit_rs_$$"
+        rm -rf "$_rs_tmpdir"; mkdir -p "$_rs_tmpdir"
+        ( get_container_stats > "$_rs_tmpdir/cstats" ) &
+        ( get_system_stats > "$_rs_tmpdir/sys" ) &
+        ( get_net_speed > "$_rs_tmpdir/net" ) &
+        wait
+
+        local stats=$(cat "$_rs_tmpdir/cstats" 2>/dev/null)
+        local sys_stats=$(cat "$_rs_tmpdir/sys" 2>/dev/null)
+        local net_speed=$(cat "$_rs_tmpdir/net" 2>/dev/null)
+        rm -rf "$_rs_tmpdir"
+
         # Normalize App CPU (Docker % / Cores)
         local raw_app_cpu=$(echo "$stats" | awk '{print $1}' | tr -d '%')
         local num_cores=$(get_cpu_cores)
         local app_cpu="0%"
         local app_cpu_display=""
-        
+
         if [[ "$raw_app_cpu" =~ ^[0-9.]+$ ]]; then
-             # Use awk for floating point math
              app_cpu=$(awk -v cpu="$raw_app_cpu" -v cores="$num_cores" 'BEGIN {printf "%.2f%%", cpu / cores}')
              if [ "$num_cores" -gt 1 ]; then
                  app_cpu_display="${app_cpu} (${raw_app_cpu}% vCPU)"
@@ -2482,18 +2547,15 @@ show_status() {
              app_cpu="${raw_app_cpu}%"
              app_cpu_display="${app_cpu}"
         fi
-        
+
         # Keep full "Used / Limit" string for App RAM
-        local app_ram=$(echo "$stats" | awk '{print $2, $3, $4}') 
-        
-        local sys_stats=$(get_system_stats)
+        local app_ram=$(echo "$stats" | awk '{print $2, $3, $4}')
+
         local sys_cpu=$(echo "$sys_stats" | awk '{print $1}')
         local sys_ram_used=$(echo "$sys_stats" | awk '{print $2}')
         local sys_ram_total=$(echo "$sys_stats" | awk '{print $3}')
         local sys_ram_pct=$(echo "$sys_stats" | awk '{print $4}')
 
-        # New Metric: Network Speed (System Wide)
-        local net_speed=$(get_net_speed)
         local rx_mbps=$(echo "$net_speed" | awk '{print $1}')
         local tx_mbps=$(echo "$net_speed" | awk '{print $2}')
         local net_display="↓ ${rx_mbps} Mbps  ↑ ${tx_mbps} Mbps"
@@ -2714,6 +2776,8 @@ restart_conduit() {
         local vol=$(get_volume_name $i)
         local want_mc=$(get_container_max_clients $i)
         local want_bw=$(get_container_bandwidth $i)
+        local want_cpus=$(get_container_cpus $i)
+        local want_mem=$(get_container_memory $i)
 
         if docker ps 2>/dev/null | grep -q "[[:space:]]${name}$"; then
             # Container is running — check if settings match
@@ -2724,6 +2788,19 @@ restart_conduit() {
             local cur_bw=$(echo "$cur_args" | sed -n 's/.*--bandwidth \([^ ]*\).*/\1/p' 2>/dev/null)
             [ "$cur_mc" != "$want_mc" ] && needs_recreate=true
             [ "$cur_bw" != "$want_bw" ] && needs_recreate=true
+            # Check resource limits
+            local cur_nano=$(docker inspect --format '{{.HostConfig.NanoCpus}}' "$name" 2>/dev/null || echo 0)
+            local cur_memb=$(docker inspect --format '{{.HostConfig.Memory}}' "$name" 2>/dev/null || echo 0)
+            local want_nano=0
+            [ -n "$want_cpus" ] && want_nano=$(awk -v c="$want_cpus" 'BEGIN{printf "%.0f", c*1000000000}')
+            local want_memb=0
+            if [ -n "$want_mem" ]; then
+                local mv=${want_mem%[mMgG]}
+                local mu=${want_mem: -1}
+                [[ "$mu" =~ [gG] ]] && want_memb=$((mv * 1073741824)) || want_memb=$((mv * 1048576))
+            fi
+            [ "${cur_nano:-0}" != "$want_nano" ] && needs_recreate=true
+            [ "${cur_memb:-0}" != "$want_memb" ] && needs_recreate=true
 
             if [ "$needs_recreate" = true ]; then
                 echo "Settings changed for ${name}, recreating..."
@@ -2746,7 +2823,17 @@ restart_conduit() {
             local cur_args=$(docker inspect --format '{{join .Args " "}}' "$name" 2>/dev/null)
             local cur_mc=$(echo "$cur_args" | sed -n 's/.*--max-clients \([^ ]*\).*/\1/p' 2>/dev/null)
             local cur_bw=$(echo "$cur_args" | sed -n 's/.*--bandwidth \([^ ]*\).*/\1/p' 2>/dev/null)
-            if [ "$cur_mc" != "$want_mc" ] || [ "$cur_bw" != "$want_bw" ]; then
+            local cur_nano=$(docker inspect --format '{{.HostConfig.NanoCpus}}' "$name" 2>/dev/null || echo 0)
+            local cur_memb=$(docker inspect --format '{{.HostConfig.Memory}}' "$name" 2>/dev/null || echo 0)
+            local want_nano=0
+            [ -n "$want_cpus" ] && want_nano=$(awk -v c="$want_cpus" 'BEGIN{printf "%.0f", c*1000000000}')
+            local want_memb=0
+            if [ -n "$want_mem" ]; then
+                local mv=${want_mem%[mMgG]}
+                local mu=${want_mem: -1}
+                [[ "$mu" =~ [gG] ]] && want_memb=$((mv * 1073741824)) || want_memb=$((mv * 1048576))
+            fi
+            if [ "$cur_mc" != "$want_mc" ] || [ "$cur_bw" != "$want_bw" ] || [ "${cur_nano:-0}" != "$want_nano" ] || [ "${cur_memb:-0}" != "$want_memb" ]; then
                 echo "Settings changed for ${name}, recreating..."
                 docker rm "$name" 2>/dev/null || true
                 docker volume create "$vol" 2>/dev/null || true
@@ -2800,15 +2887,19 @@ change_settings() {
     echo ""
     echo -e "${CYAN}═══ Current Settings ═══${NC}"
     echo ""
-    printf "  ${BOLD}%-12s %-12s %-12s${NC}\n" "Container" "Max Clients" "Bandwidth"
-    echo -e "  ${CYAN}────────────────────────────────────────${NC}"
+    printf "  ${BOLD}%-12s %-12s %-12s %-10s %-10s${NC}\n" "Container" "Max Clients" "Bandwidth" "CPU" "Memory"
+    echo -e "  ${CYAN}──────────────────────────────────────────────────────────${NC}"
     for i in $(seq 1 $CONTAINER_COUNT); do
         local cname=$(get_container_name $i)
         local mc=$(get_container_max_clients $i)
         local bw=$(get_container_bandwidth $i)
+        local cpus=$(get_container_cpus $i)
+        local mem=$(get_container_memory $i)
         local bw_display="Unlimited"
         [ "$bw" != "-1" ] && bw_display="${bw} Mbps"
-        printf "  %-12s %-12s %-12s\n" "$cname" "$mc" "$bw_display"
+        local cpu_d="${cpus:-—}"
+        local mem_d="${mem:-—}"
+        printf "  %-12s %-12s %-12s %-10s %-10s\n" "$cname" "$mc" "$bw_display" "$cpu_d" "$mem_d"
     done
     echo ""
     echo -e "  Default: Max Clients=${GREEN}${MAX_CLIENTS}${NC}  Bandwidth=${GREEN}$([ "$BANDWIDTH" = "-1" ] && echo "Unlimited" || echo "${BANDWIDTH} Mbps")${NC}"
@@ -2918,6 +3009,188 @@ change_settings() {
             local bw_d="Unlimited"
             [ "$bw" != "-1" ] && bw_d="${bw} Mbps"
             echo -e "  ${GREEN}✓ ${name}${NC} — clients: ${mc}, bandwidth: ${bw_d}"
+        else
+            echo -e "  ${RED}✗ Failed to restart ${name}${NC}"
+        fi
+    done
+}
+
+change_resource_limits() {
+    local cpu_cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
+    local ram_mb=$(awk '/MemTotal/{printf "%.0f", $2/1024}' /proc/meminfo 2>/dev/null || echo 512)
+    echo ""
+    echo -e "${CYAN}═══ RESOURCE LIMITS ═══${NC}"
+    echo ""
+    echo -e "  Set CPU and memory limits per container."
+    echo -e "  ${DIM}System: ${cpu_cores} CPU core(s), ${ram_mb} MB RAM${NC}"
+    echo ""
+
+    # Show current limits
+    printf "  ${BOLD}%-12s %-12s %-12s${NC}\n" "Container" "CPU Limit" "Memory Limit"
+    echo -e "  ${CYAN}────────────────────────────────────────${NC}"
+    for i in $(seq 1 $CONTAINER_COUNT); do
+        local cname=$(get_container_name $i)
+        local cpus=$(get_container_cpus $i)
+        local mem=$(get_container_memory $i)
+        local cpu_d="${cpus:-No limit}"
+        local mem_d="${mem:-No limit}"
+        [ -n "$cpus" ] && cpu_d="${cpus} cores"
+        printf "  %-12s %-12s %-12s\n" "$cname" "$cpu_d" "$mem_d"
+    done
+    echo ""
+
+    # Select target
+    echo -e "  ${BOLD}Apply limits to:${NC}"
+    echo -e "  ${GREEN}a${NC}) All containers"
+    for i in $(seq 1 $CONTAINER_COUNT); do
+        echo -e "  ${GREEN}${i}${NC}) $(get_container_name $i)"
+    done
+    echo -e "  ${GREEN}c${NC}) Clear all limits (remove restrictions)"
+    echo ""
+    read -p "  Select (a/1-${CONTAINER_COUNT}/c): " target < /dev/tty || true
+
+    if [ "$target" = "c" ] || [ "$target" = "C" ]; then
+        DOCKER_CPUS=""
+        DOCKER_MEMORY=""
+        for i in $(seq 1 5); do
+            unset "CPUS_${i}" 2>/dev/null || true
+            unset "MEMORY_${i}" 2>/dev/null || true
+        done
+        save_settings
+        echo -e "  ${GREEN}✓ All resource limits cleared. Containers will use full system resources on next restart.${NC}"
+        return
+    fi
+
+    local targets=()
+    if [ "$target" = "a" ] || [ "$target" = "A" ]; then
+        for i in $(seq 1 $CONTAINER_COUNT); do targets+=($i); done
+    elif [[ "$target" =~ ^[0-9]+$ ]] && [ "$target" -ge 1 ] && [ "$target" -le "$CONTAINER_COUNT" ]; then
+        targets+=($target)
+    else
+        echo -e "  ${RED}Invalid selection.${NC}"
+        return
+    fi
+
+    local rec_cpu=$(awk -v c="$cpu_cores" 'BEGIN{v=c/2; if(v<0.5) v=0.5; printf "%.1f", v}')
+    local rec_mem="256m"
+    [ "$ram_mb" -ge 2048 ] && rec_mem="512m"
+    [ "$ram_mb" -ge 4096 ] && rec_mem="1g"
+
+    # CPU limit prompt
+    echo ""
+    echo -e "  ${CYAN}───────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}CPU Limit${NC}"
+    echo -e "  Limits how much processor power this container can use."
+    echo -e "  This prevents it from slowing down other services on your system."
+    echo -e ""
+    echo -e "  ${DIM}Your system has ${GREEN}${cpu_cores}${NC}${DIM} core(s).${NC}"
+    echo -e "  ${DIM}  0.5 = half a core    1.0 = one full core${NC}"
+    echo -e "  ${DIM}  2.0 = two cores      ${cpu_cores}.0 = all cores (no limit)${NC}"
+    echo -e ""
+    echo -e "  Press Enter to keep current or use default."
+    echo -e "  ${CYAN}───────────────────────────────────────────────────────────────${NC}"
+    local cur_cpus=$(get_container_cpus ${targets[0]})
+    local cpus_default="${cur_cpus:-${rec_cpu}}"
+    read -p "  CPU limit [${cpus_default}]: " input_cpus < /dev/tty || true
+
+    # Validate CPU
+    local valid_cpus=""
+    if [ -z "$input_cpus" ]; then
+        # Enter pressed — keep current if set, otherwise no change
+        [ -n "$cur_cpus" ] && valid_cpus="$cur_cpus"
+    elif [[ "$input_cpus" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+        local cpu_ok=$(awk -v val="$input_cpus" -v max="$cpu_cores" 'BEGIN { print (val > 0 && val <= max) ? "yes" : "no" }')
+        if [ "$cpu_ok" = "yes" ]; then
+            valid_cpus="$input_cpus"
+        else
+            echo -e "  ${YELLOW}Must be between 0.1 and ${cpu_cores}. Keeping current.${NC}"
+            [ -n "$cur_cpus" ] && valid_cpus="$cur_cpus"
+        fi
+    else
+        echo -e "  ${YELLOW}Invalid input. Keeping current.${NC}"
+        [ -n "$cur_cpus" ] && valid_cpus="$cur_cpus"
+    fi
+
+    # Memory limit prompt
+    echo ""
+    echo -e "  ${CYAN}───────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}Memory Limit${NC}"
+    echo -e "  Maximum RAM this container can use."
+    echo -e "  Prevents it from consuming all memory and crashing other services."
+    echo -e ""
+    echo -e "  ${DIM}Your system has ${GREEN}${ram_mb} MB${NC}${DIM} RAM.${NC}"
+    echo -e "  ${DIM}  256m  = 256 MB (good for low-end systems)${NC}"
+    echo -e "  ${DIM}  512m  = 512 MB (balanced)${NC}"
+    echo -e "  ${DIM}  1g    = 1 GB   (high capacity)${NC}"
+    echo -e ""
+    echo -e "  Press Enter to keep current or use default."
+    echo -e "  ${CYAN}───────────────────────────────────────────────────────────────${NC}"
+    local cur_mem=$(get_container_memory ${targets[0]})
+    local mem_default="${cur_mem:-${rec_mem}}"
+    read -p "  Memory limit [${mem_default}]: " input_mem < /dev/tty || true
+
+    # Validate memory
+    local valid_mem=""
+    if [ -z "$input_mem" ]; then
+        # Enter pressed — keep current if set, otherwise no change
+        [ -n "$cur_mem" ] && valid_mem="$cur_mem"
+    elif [[ "$input_mem" =~ ^[0-9]+[mMgG]$ ]]; then
+        local mem_val=${input_mem%[mMgG]}
+        local mem_unit=${input_mem: -1}
+        local mem_mb=$mem_val
+        [[ "$mem_unit" =~ [gG] ]] && mem_mb=$((mem_val * 1024))
+        if [ "$mem_mb" -ge 64 ] && [ "$mem_mb" -le "$ram_mb" ]; then
+            valid_mem="$input_mem"
+        else
+            echo -e "  ${YELLOW}Must be between 64m and ${ram_mb}m. Keeping current.${NC}"
+            [ -n "$cur_mem" ] && valid_mem="$cur_mem"
+        fi
+    else
+        echo -e "  ${YELLOW}Invalid format. Use a number followed by m or g (e.g. 256m, 1g). Keeping current.${NC}"
+        [ -n "$cur_mem" ] && valid_mem="$cur_mem"
+    fi
+
+    # Nothing changed
+    if [ -z "$valid_cpus" ] && [ -z "$valid_mem" ]; then
+        echo -e "  ${DIM}No changes made.${NC}"
+        return
+    fi
+
+    # Apply
+    if [ "$target" = "a" ] || [ "$target" = "A" ]; then
+        [ -n "$valid_cpus" ] && DOCKER_CPUS="$valid_cpus"
+        [ -n "$valid_mem" ] && DOCKER_MEMORY="$valid_mem"
+        for i in $(seq 1 5); do
+            unset "CPUS_${i}" 2>/dev/null || true
+            unset "MEMORY_${i}" 2>/dev/null || true
+        done
+    else
+        local idx=${targets[0]}
+        [ -n "$valid_cpus" ] && eval "CPUS_${idx}=${valid_cpus}"
+        [ -n "$valid_mem" ] && eval "MEMORY_${idx}=${valid_mem}"
+    fi
+
+    save_settings
+
+    # Recreate affected containers
+    echo ""
+    echo "  Recreating container(s) with new resource limits..."
+    for i in "${targets[@]}"; do
+        local name=$(get_container_name $i)
+        docker rm -f "$name" 2>/dev/null || true
+    done
+    sleep 1
+    for i in "${targets[@]}"; do
+        local name=$(get_container_name $i)
+        fix_volume_permissions $i
+        run_conduit_container $i
+        if [ $? -eq 0 ]; then
+            local cpus=$(get_container_cpus $i)
+            local mem=$(get_container_memory $i)
+            local cpu_d="${cpus:-no limit}"
+            local mem_d="${mem:-no limit}"
+            [ -n "$cpus" ] && cpu_d="${cpus} cores"
+            echo -e "  ${GREEN}✓ ${name}${NC} — CPU: ${cpu_d}, Memory: ${mem_d}"
         else
             echo -e "  ${RED}✗ Failed to restart ${name}${NC}"
         fi
@@ -3115,18 +3388,27 @@ manage_containers() {
         # Per-container stats table
         local docker_ps_cache=$(docker ps --format '{{.Names}}' 2>/dev/null)
 
-        # Single docker stats call for all running containers (instead of per-container)
-        local all_dstats=""
+        # Collect all docker data in parallel using a temp dir
+        local _mc_tmpdir="/tmp/.conduit_mc_$$"
+        rm -rf "$_mc_tmpdir"; mkdir -p "$_mc_tmpdir"
+
         local running_names=""
         for ci in $(seq 1 $CONTAINER_COUNT); do
             local cname=$(get_container_name $ci)
             if echo "$docker_ps_cache" | grep -q "^${cname}$"; then
                 running_names+=" $cname"
+                # Fetch logs in parallel background jobs
+                ( docker logs --tail 30 "$cname" 2>&1 | grep "\[STATS\]" | tail -1 > "$_mc_tmpdir/logs_${ci}" ) &
             fi
         done
+        # Fetch stats in parallel with logs
         if [ -n "$running_names" ]; then
-            all_dstats=$(docker stats --no-stream --format "{{.Name}} {{.CPUPerc}} {{.MemUsage}}" $running_names 2>/dev/null)
+            ( docker stats --no-stream --format "{{.Name}} {{.CPUPerc}} {{.MemUsage}}" $running_names > "$_mc_tmpdir/stats" 2>/dev/null ) &
         fi
+        wait
+
+        local all_dstats=""
+        [ -f "$_mc_tmpdir/stats" ] && all_dstats=$(cat "$_mc_tmpdir/stats")
 
         printf "  ${BOLD}%-2s %-11s %-8s %-7s %-8s %-8s %-6s %-7s${NC}${EL}\n" \
             "#" "Container" "Status" "Clients" "Up" "Down" "CPU" "RAM"
@@ -3141,7 +3423,8 @@ manage_containers() {
                 if echo "$docker_ps_cache" | grep -q "^${cname}$"; then
                     status_text="Running"
                     status_color="${GREEN}"
-                    local logs=$(docker logs --tail 50 "$cname" 2>&1 | grep "STATS" | tail -1)
+                    local logs=""
+                    [ -f "$_mc_tmpdir/logs_${ci}" ] && logs=$(cat "$_mc_tmpdir/logs_${ci}")
                     if [ -n "$logs" ]; then
                         IFS='|' read -r conn cing mc_up mc_down <<< $(echo "$logs" | awk '{
                             cing=0; conn=0; up=""; down=""
@@ -3175,6 +3458,8 @@ manage_containers() {
             printf "  %-2s %-11s %b%-8s%b %-7s %-8s %-8s %-6s %-7s${EL}\n" \
                 "$ci" "$cname" "$status_color" "$status_text" "${NC}" "$c_clients" "$c_up" "$c_down" "$c_cpu" "$c_ram"
         done
+
+        rm -rf "$_mc_tmpdir"
 
         echo -e "${EL}"
         echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}${EL}"
@@ -3223,6 +3508,86 @@ manage_containers() {
                 fi
                 local old_count=$CONTAINER_COUNT
                 CONTAINER_COUNT=$((CONTAINER_COUNT + add_count))
+
+                # Ask if user wants to set resource limits on new containers
+                local set_limits=""
+                local new_cpus="" new_mem=""
+                echo ""
+                read -p "  Set CPU/memory limits on new container(s)? [y/N]: " set_limits < /dev/tty || true
+                if [[ "$set_limits" =~ ^[Yy]$ ]]; then
+                    local cpu_cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
+                    local ram_mb=$(awk '/MemTotal/{printf "%.0f", $2/1024}' /proc/meminfo 2>/dev/null || echo 512)
+                    local rec_cpu=$(awk -v c="$cpu_cores" 'BEGIN{v=c/2; if(v<0.5) v=0.5; printf "%.1f", v}')
+                    local rec_mem="256m"
+                    [ "$ram_mb" -ge 2048 ] && rec_mem="512m"
+                    [ "$ram_mb" -ge 4096 ] && rec_mem="1g"
+
+                    echo ""
+                    echo -e "  ${CYAN}───────────────────────────────────────────────────────────────${NC}"
+                    echo -e "  ${BOLD}CPU Limit${NC}"
+                    echo -e "  Limits how much processor power this container can use."
+                    echo -e "  This prevents it from slowing down other services on your system."
+                    echo -e ""
+                    echo -e "  ${DIM}Your system has ${GREEN}${cpu_cores}${NC}${DIM} core(s).${NC}"
+                    echo -e "  ${DIM}  0.5 = half a core    1.0 = one full core${NC}"
+                    echo -e "  ${DIM}  2.0 = two cores      ${cpu_cores}.0 = all cores (no limit)${NC}"
+                    echo -e ""
+                    echo -e "  Press Enter to use the recommended default."
+                    echo -e "  ${CYAN}───────────────────────────────────────────────────────────────${NC}"
+                    read -p "  CPU limit [${rec_cpu}]: " input_cpus < /dev/tty || true
+                    [ -z "$input_cpus" ] && input_cpus="$rec_cpu"
+                    if [[ "$input_cpus" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+                        local cpu_ok=$(awk -v val="$input_cpus" -v max="$cpu_cores" 'BEGIN { print (val > 0 && val <= max) ? "yes" : "no" }')
+                        if [ "$cpu_ok" = "yes" ]; then
+                            new_cpus="$input_cpus"
+                            echo -e "  ${GREEN}✓ CPU limit: ${new_cpus} core(s)${NC}"
+                        else
+                            echo -e "  ${YELLOW}Must be between 0.1 and ${cpu_cores}. Using default: ${rec_cpu}${NC}"
+                            new_cpus="$rec_cpu"
+                        fi
+                    else
+                        echo -e "  ${YELLOW}Invalid input. Using default: ${rec_cpu}${NC}"
+                        new_cpus="$rec_cpu"
+                    fi
+
+                    echo ""
+                    echo -e "  ${CYAN}───────────────────────────────────────────────────────────────${NC}"
+                    echo -e "  ${BOLD}Memory Limit${NC}"
+                    echo -e "  Maximum RAM this container can use."
+                    echo -e "  Prevents it from consuming all memory and crashing other services."
+                    echo -e ""
+                    echo -e "  ${DIM}Your system has ${GREEN}${ram_mb} MB${NC}${DIM} RAM.${NC}"
+                    echo -e "  ${DIM}  256m  = 256 MB (good for low-end systems)${NC}"
+                    echo -e "  ${DIM}  512m  = 512 MB (balanced)${NC}"
+                    echo -e "  ${DIM}  1g    = 1 GB   (high capacity)${NC}"
+                    echo -e ""
+                    echo -e "  Press Enter to use the recommended default."
+                    echo -e "  ${CYAN}───────────────────────────────────────────────────────────────${NC}"
+                    read -p "  Memory limit [${rec_mem}]: " input_mem < /dev/tty || true
+                    [ -z "$input_mem" ] && input_mem="$rec_mem"
+                    if [[ "$input_mem" =~ ^[0-9]+[mMgG]$ ]]; then
+                        local mem_val=${input_mem%[mMgG]}
+                        local mem_unit=${input_mem: -1}
+                        local mem_mb_val=$mem_val
+                        [[ "$mem_unit" =~ [gG] ]] && mem_mb_val=$((mem_val * 1024))
+                        if [ "$mem_mb_val" -ge 64 ] && [ "$mem_mb_val" -le "$ram_mb" ]; then
+                            new_mem="$input_mem"
+                            echo -e "  ${GREEN}✓ Memory limit: ${new_mem}${NC}"
+                        else
+                            echo -e "  ${YELLOW}Must be between 64m and ${ram_mb}m. Using default: ${rec_mem}${NC}"
+                            new_mem="$rec_mem"
+                        fi
+                    else
+                        echo -e "  ${YELLOW}Invalid format. Using default: ${rec_mem}${NC}"
+                        new_mem="$rec_mem"
+                    fi
+                    # Save per-container overrides for new containers
+                    for i in $(seq $((old_count + 1)) $CONTAINER_COUNT); do
+                        [ -n "$new_cpus" ] && eval "CPUS_${i}=${new_cpus}"
+                        [ -n "$new_mem" ] && eval "MEMORY_${i}=${new_mem}"
+                    done
+                fi
+
                 save_settings
                 for i in $(seq $((old_count + 1)) $CONTAINER_COUNT); do
                     local name=$(get_container_name $i)
@@ -3231,7 +3596,12 @@ manage_containers() {
                     fix_volume_permissions $i
                     run_conduit_container $i
                     if [ $? -eq 0 ]; then
-                        echo -e "  ${GREEN}✓ ${name} started${NC}"
+                        local c_cpu=$(get_container_cpus $i)
+                        local c_mem=$(get_container_memory $i)
+                        local cpu_info="" mem_info=""
+                        [ -n "$c_cpu" ] && cpu_info=", CPU: ${c_cpu}"
+                        [ -n "$c_mem" ] && mem_info=", Mem: ${c_mem}"
+                        echo -e "  ${GREEN}✓ ${name} started${NC}${cpu_info}${mem_info}"
                     else
                         echo -e "  ${RED}✗ Failed to start ${name}${NC}"
                     fi
@@ -3254,51 +3624,83 @@ manage_containers() {
                 local old_count=$CONTAINER_COUNT
                 CONTAINER_COUNT=$((CONTAINER_COUNT - rm_count))
                 save_settings
+                # Remove containers in parallel
+                local _rm_pids=() _rm_names=()
                 for i in $(seq $((CONTAINER_COUNT + 1)) $old_count); do
                     local name=$(get_container_name $i)
-                    docker stop "$name" 2>/dev/null || true
-                    docker rm "$name" 2>/dev/null || true
-                    echo -e "  ${YELLOW}✓ ${name} removed${NC}"
+                    _rm_names+=("$name")
+                    ( docker rm -f "$name" >/dev/null 2>&1 ) &
+                    _rm_pids+=($!)
+                done
+                for idx in "${!_rm_pids[@]}"; do
+                    if wait "${_rm_pids[$idx]}" 2>/dev/null; then
+                        echo -e "  ${YELLOW}✓ ${_rm_names[$idx]} removed${NC}"
+                    else
+                        echo -e "  ${RED}✗ Failed to remove ${_rm_names[$idx]}${NC}"
+                    fi
                 done
                 read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
                 ;;
             s)
                 read -p "  Start which container? (1-${CONTAINER_COUNT}, or 'all'): " sc_idx < /dev/tty || true
+                local sc_targets=()
                 if [ "$sc_idx" = "all" ]; then
-                    for i in $(seq 1 $CONTAINER_COUNT); do
-                        local name=$(get_container_name $i)
-                        local vol=$(get_volume_name $i)
-                        if docker ps -a 2>/dev/null | grep -q "[[:space:]]${name}$"; then
-                            docker start "$name" 2>/dev/null
-                        else
+                    for i in $(seq 1 $CONTAINER_COUNT); do sc_targets+=($i); done
+                elif [[ "$sc_idx" =~ ^[1-5]$ ]] && [ "$sc_idx" -le "$CONTAINER_COUNT" ]; then
+                    sc_targets+=($sc_idx)
+                else
+                    echo -e "  ${RED}Invalid.${NC}"
+                fi
+                # Batch: get all existing containers and their inspect data in one call
+                local existing_containers=$(docker ps -a --format '{{.Names}}' 2>/dev/null)
+                local all_inspect=""
+                local inspect_names=""
+                for i in "${sc_targets[@]}"; do
+                    local cn=$(get_container_name $i)
+                    echo "$existing_containers" | grep -q "^${cn}$" && inspect_names+=" $cn"
+                done
+                [ -n "$inspect_names" ] && all_inspect=$(docker inspect --format '{{.Name}} {{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}' $inspect_names 2>/dev/null)
+
+                for i in "${sc_targets[@]}"; do
+                    local name=$(get_container_name $i)
+                    local vol=$(get_volume_name $i)
+                    if echo "$existing_containers" | grep -q "^${name}$"; then
+                        # Check if settings changed — recreate if needed
+                        local needs_recreate=false
+                        local want_cpus=$(get_container_cpus $i)
+                        local want_mem=$(get_container_memory $i)
+                        local insp_line=$(echo "$all_inspect" | grep "/${name} " 2>/dev/null)
+                        local cur_nano=$(echo "$insp_line" | awk '{print $2}')
+                        local cur_memb=$(echo "$insp_line" | awk '{print $3}')
+                        local want_nano=0
+                        [ -n "$want_cpus" ] && want_nano=$(awk -v c="$want_cpus" 'BEGIN{printf "%.0f", c*1000000000}')
+                        local want_memb=0
+                        if [ -n "$want_mem" ]; then
+                            local mv=${want_mem%[mMgG]}; local mu=${want_mem: -1}
+                            [[ "$mu" =~ [gG] ]] && want_memb=$((mv * 1073741824)) || want_memb=$((mv * 1048576))
+                        fi
+                        [ "${cur_nano:-0}" != "$want_nano" ] && needs_recreate=true
+                        [ "${cur_memb:-0}" != "$want_memb" ] && needs_recreate=true
+                        if [ "$needs_recreate" = true ]; then
+                            echo -e "  Settings changed for ${name}, recreating..."
+                            docker rm -f "$name" 2>/dev/null || true
                             docker volume create "$vol" 2>/dev/null || true
                             fix_volume_permissions $i
                             run_conduit_container $i
-                        fi
-                        if [ $? -eq 0 ]; then
-                            echo -e "  ${GREEN}✓ ${name} started${NC}"
                         else
-                            echo -e "  ${RED}✗ Failed to start ${name}${NC}"
+                            docker start "$name" 2>/dev/null
                         fi
-                    done
-                elif [[ "$sc_idx" =~ ^[1-5]$ ]] && [ "$sc_idx" -le "$CONTAINER_COUNT" ]; then
-                    local name=$(get_container_name $sc_idx)
-                    local vol=$(get_volume_name $sc_idx)
-                    if docker ps -a 2>/dev/null | grep -q "[[:space:]]${name}$"; then
-                        docker start "$name" 2>/dev/null
                     else
                         docker volume create "$vol" 2>/dev/null || true
-                        fix_volume_permissions $sc_idx
-                        run_conduit_container $sc_idx
+                        fix_volume_permissions $i
+                        run_conduit_container $i
                     fi
                     if [ $? -eq 0 ]; then
                         echo -e "  ${GREEN}✓ ${name} started${NC}"
                     else
                         echo -e "  ${RED}✗ Failed to start ${name}${NC}"
                     fi
-                else
-                    echo -e "  ${RED}Invalid.${NC}"
-                fi
+                done
                 # Ensure tracker service is running when containers are started
                 setup_tracker_service 2>/dev/null || true
                 read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
@@ -3306,17 +3708,25 @@ manage_containers() {
             t)
                 read -p "  Stop which container? (1-${CONTAINER_COUNT}, or 'all'): " sc_idx < /dev/tty || true
                 if [ "$sc_idx" = "all" ]; then
+                    # Stop all containers in parallel with short timeout
+                    local _stop_pids=()
+                    local _stop_names=()
                     for i in $(seq 1 $CONTAINER_COUNT); do
                         local name=$(get_container_name $i)
-                        if docker stop "$name" 2>/dev/null; then
-                            echo -e "  ${YELLOW}✓ ${name} stopped${NC}"
+                        _stop_names+=("$name")
+                        ( docker stop -t 3 "$name" >/dev/null 2>&1 ) &
+                        _stop_pids+=($!)
+                    done
+                    for idx in "${!_stop_pids[@]}"; do
+                        if wait "${_stop_pids[$idx]}" 2>/dev/null; then
+                            echo -e "  ${YELLOW}✓ ${_stop_names[$idx]} stopped${NC}"
                         else
-                            echo -e "  ${YELLOW}  ${name} was not running${NC}"
+                            echo -e "  ${YELLOW}  ${_stop_names[$idx]} was not running${NC}"
                         fi
                     done
                 elif [[ "$sc_idx" =~ ^[1-5]$ ]] && [ "$sc_idx" -le "$CONTAINER_COUNT" ]; then
                     local name=$(get_container_name $sc_idx)
-                    if docker stop "$name" 2>/dev/null; then
+                    if docker stop -t 3 "$name" 2>/dev/null; then
                         echo -e "  ${YELLOW}✓ ${name} stopped${NC}"
                     else
                         echo -e "  ${YELLOW}  ${name} was not running${NC}"
@@ -3328,6 +3738,7 @@ manage_containers() {
                 ;;
             x)
                 read -p "  Restart which container? (1-${CONTAINER_COUNT}, or 'all'): " sc_idx < /dev/tty || true
+                local xc_targets=()
                 if [ "$sc_idx" = "all" ]; then
                     local persist_dir="$INSTALL_DIR/traffic_stats"
                     if [ -s "$persist_dir/cumulative_data" ] || [ -s "$persist_dir/cumulative_ips" ]; then
@@ -3337,27 +3748,71 @@ manage_containers() {
                         [ -s "$persist_dir/geoip_cache" ] && cp "$persist_dir/geoip_cache" "$persist_dir/geoip_cache.bak"
                         echo -e "  ${GREEN}✓ Tracker data snapshot saved${NC}"
                     fi
-                    for i in $(seq 1 $CONTAINER_COUNT); do
-                        local name=$(get_container_name $i)
-                        if docker restart "$name" 2>/dev/null; then
+                    for i in $(seq 1 $CONTAINER_COUNT); do xc_targets+=($i); done
+                elif [[ "$sc_idx" =~ ^[1-5]$ ]] && [ "$sc_idx" -le "$CONTAINER_COUNT" ]; then
+                    xc_targets+=($sc_idx)
+                else
+                    echo -e "  ${RED}Invalid.${NC}"
+                fi
+                # Batch: get all existing containers and inspect data in one call
+                local existing_containers=$(docker ps -a --format '{{.Names}}' 2>/dev/null)
+                local all_inspect=""
+                local inspect_names=""
+                for i in "${xc_targets[@]}"; do
+                    local cn=$(get_container_name $i)
+                    echo "$existing_containers" | grep -q "^${cn}$" && inspect_names+=" $cn"
+                done
+                [ -n "$inspect_names" ] && all_inspect=$(docker inspect --format '{{.Name}} {{join .Args " "}} |||{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}' $inspect_names 2>/dev/null)
+
+                for i in "${xc_targets[@]}"; do
+                    local name=$(get_container_name $i)
+                    local vol=$(get_volume_name $i)
+                    local needs_recreate=false
+                    local want_cpus=$(get_container_cpus $i)
+                    local want_mem=$(get_container_memory $i)
+                    local want_mc=$(get_container_max_clients $i)
+                    local want_bw=$(get_container_bandwidth $i)
+                    if echo "$existing_containers" | grep -q "^${name}$"; then
+                        local insp_line=$(echo "$all_inspect" | grep "/${name} " 2>/dev/null)
+                        local cur_args=$(echo "$insp_line" | sed 's/.*\/'"$name"' //' | sed 's/ |||.*//')
+                        local cur_mc=$(echo "$cur_args" | sed -n 's/.*--max-clients \([^ ]*\).*/\1/p' 2>/dev/null)
+                        local cur_bw=$(echo "$cur_args" | sed -n 's/.*--bandwidth \([^ ]*\).*/\1/p' 2>/dev/null)
+                        [ "$cur_mc" != "$want_mc" ] && needs_recreate=true
+                        [ "$cur_bw" != "$want_bw" ] && needs_recreate=true
+                        local cur_nano=$(echo "$insp_line" | sed 's/.*|||//' | awk '{print $1}')
+                        local cur_memb=$(echo "$insp_line" | sed 's/.*|||//' | awk '{print $2}')
+                        local want_nano=0
+                        [ -n "$want_cpus" ] && want_nano=$(awk -v c="$want_cpus" 'BEGIN{printf "%.0f", c*1000000000}')
+                        local want_memb=0
+                        if [ -n "$want_mem" ]; then
+                            local mv=${want_mem%[mMgG]}; local mu=${want_mem: -1}
+                            [[ "$mu" =~ [gG] ]] && want_memb=$((mv * 1073741824)) || want_memb=$((mv * 1048576))
+                        fi
+                        [ "${cur_nano:-0}" != "$want_nano" ] && needs_recreate=true
+                        [ "${cur_memb:-0}" != "$want_memb" ] && needs_recreate=true
+                    fi
+                    if [ "$needs_recreate" = true ]; then
+                        echo -e "  Settings changed for ${name}, recreating..."
+                        docker rm -f "$name" 2>/dev/null || true
+                        docker volume create "$vol" 2>/dev/null || true
+                        fix_volume_permissions $i
+                        run_conduit_container $i
+                        if [ $? -eq 0 ]; then
+                            echo -e "  ${GREEN}✓ ${name} recreated with new settings${NC}"
+                        else
+                            echo -e "  ${RED}✗ Failed to recreate ${name}${NC}"
+                        fi
+                    else
+                        if docker restart -t 3 "$name" 2>/dev/null; then
                             echo -e "  ${GREEN}✓ ${name} restarted${NC}"
                         else
                             echo -e "  ${RED}✗ Failed to restart ${name}${NC}"
                         fi
-                    done
-                    # Restart tracker to pick up new container state
-                    if command -v systemctl &>/dev/null && systemctl is-active --quiet conduit-tracker.service 2>/dev/null; then
-                        systemctl restart conduit-tracker.service 2>/dev/null || true
                     fi
-                elif [[ "$sc_idx" =~ ^[1-5]$ ]] && [ "$sc_idx" -le "$CONTAINER_COUNT" ]; then
-                    local name=$(get_container_name $sc_idx)
-                    if docker restart "$name" 2>/dev/null; then
-                        echo -e "  ${GREEN}✓ ${name} restarted${NC}"
-                    else
-                        echo -e "  ${RED}✗ Failed to restart ${name}${NC}"
-                    fi
-                else
-                    echo -e "  ${RED}Invalid.${NC}"
+                done
+                # Restart tracker to pick up new container state
+                if command -v systemctl &>/dev/null && systemctl is-active --quiet conduit-tracker.service 2>/dev/null; then
+                    systemctl restart conduit-tracker.service 2>/dev/null || true
                 fi
                 read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
                 ;;
@@ -3547,13 +4002,19 @@ TELEGRAM_DAILY_SUMMARY=${TELEGRAM_DAILY_SUMMARY:-true}
 TELEGRAM_WEEKLY_SUMMARY=${TELEGRAM_WEEKLY_SUMMARY:-true}
 TELEGRAM_SERVER_LABEL="${TELEGRAM_SERVER_LABEL:-}"
 TELEGRAM_START_HOUR=${TELEGRAM_START_HOUR:-0}
+DOCKER_CPUS=${DOCKER_CPUS:-}
+DOCKER_MEMORY=${DOCKER_MEMORY:-}
 EOF
     # Save per-container overrides
     for i in $(seq 1 5); do
         local mc_var="MAX_CLIENTS_${i}"
         local bw_var="BANDWIDTH_${i}"
+        local cpu_var="CPUS_${i}"
+        local mem_var="MEMORY_${i}"
         [ -n "${!mc_var}" ] && echo "${mc_var}=${!mc_var}" >> "$INSTALL_DIR/settings.conf"
         [ -n "${!bw_var}" ] && echo "${bw_var}=${!bw_var}" >> "$INSTALL_DIR/settings.conf"
+        [ -n "${!cpu_var}" ] && echo "${cpu_var}=${!cpu_var}" >> "$INSTALL_DIR/settings.conf"
+        [ -n "${!mem_var}" ] && echo "${mem_var}=${!mem_var}" >> "$INSTALL_DIR/settings.conf"
     done
     chmod 600 "$INSTALL_DIR/settings.conf" 2>/dev/null || true
 }
@@ -4615,6 +5076,7 @@ show_settings_menu() {
             echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
             echo -e "  1. ⚙️  Change settings (max-clients, bandwidth)"
             echo -e "  2. 📊 Set data usage cap"
+            echo -e "  l. 🖥️  Set resource limits (CPU, memory)"
             echo ""
             echo -e "  3. 💾 Backup node key"
             echo -e "  4. 📥 Restore node key"
@@ -4650,6 +5112,11 @@ show_settings_menu() {
                 ;;
             2)
                 set_data_cap
+                read -n 1 -s -r -p "Press any key to return..." < /dev/tty || true
+                redraw=true
+                ;;
+            l|L)
+                change_resource_limits
                 read -n 1 -s -r -p "Press any key to return..." < /dev/tty || true
                 redraw=true
                 ;;
