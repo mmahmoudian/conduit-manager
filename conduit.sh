@@ -2253,7 +2253,7 @@ show_peers() {
             # TOP 10 TRAFFIC FROM (peers connecting to you)
             echo -e "${GREEN}${BOLD} 📥 TOP 10 TRAFFIC FROM ${NC}${DIM}(peers connecting to you)${NC}${EL}"
             echo -e "${EL}"
-            printf " ${BOLD}%-26s %10s %12s  %-12s${NC}${EL}\n" "Country" "Total" "Speed" "IPs / Clients"
+            printf " ${BOLD}%-26s %10s %12s  %s${NC}${EL}\n" "Country" "Total" "Speed" "Clients"
             echo -e "${EL}"
             if [ "$grand_in" -gt 0 ]; then
                 while IFS='|' read -r bytes country; do
@@ -2269,7 +2269,7 @@ show_peers() {
                         est_clients=$(( (snap_cnt * total_clients) / snap_total_from_ips ))
                         [ "$est_clients" -eq 0 ] && [ "$snap_cnt" -gt 0 ] && est_clients=1
                     fi
-                    printf " ${GREEN}%-26.26s${NC} %10s %10s/s  %5s/%s${EL}\n" "$country" "$(format_bytes $bytes)" "$speed_str" "$(format_number $ips_all)" "$(format_number $est_clients)"
+                    printf " ${GREEN}%-26.26s${NC} %10s %10s/s  %s${EL}\n" "$country" "$(format_bytes $bytes)" "$speed_str" "$(format_number $est_clients)"
                 done < <(for c in "${!cumul_from[@]}"; do echo "${cumul_from[$c]:-0}|$c"; done | sort -t'|' -k1 -nr | head -10)
             else
                 echo -e " ${DIM}Waiting for data...${NC}${EL}"
@@ -2279,7 +2279,7 @@ show_peers() {
             # TOP 10 TRAFFIC TO (data sent to peers)
             echo -e "${YELLOW}${BOLD} 📤 TOP 10 TRAFFIC TO ${NC}${DIM}(data sent to peers)${NC}${EL}"
             echo -e "${EL}"
-            printf " ${BOLD}%-26s %10s %12s  %-12s${NC}${EL}\n" "Country" "Total" "Speed" "IPs / Clients"
+            printf " ${BOLD}%-26s %10s %12s  %s${NC}${EL}\n" "Country" "Total" "Speed" "Clients"
             echo -e "${EL}"
             if [ "$grand_out" -gt 0 ]; then
                 while IFS='|' read -r bytes country; do
@@ -2294,7 +2294,7 @@ show_peers() {
                         est_clients=$(( (snap_cnt * total_clients) / snap_total_to_ips ))
                         [ "$est_clients" -eq 0 ] && [ "$snap_cnt" -gt 0 ] && est_clients=1
                     fi
-                    printf " ${YELLOW}%-26.26s${NC} %10s %10s/s  %5s/%s${EL}\n" "$country" "$(format_bytes $bytes)" "$speed_str" "$(format_number $ips_all)" "$(format_number $est_clients)"
+                    printf " ${YELLOW}%-26.26s${NC} %10s %10s/s  %s${EL}\n" "$country" "$(format_bytes $bytes)" "$speed_str" "$(format_number $est_clients)"
                 done < <(for c in "${!cumul_to[@]}"; do echo "${cumul_to[$c]:-0}|$c"; done | sort -t'|' -k1 -nr | head -10)
             else
                 echo -e " ${DIM}Waiting for data...${NC}${EL}"
@@ -3758,11 +3758,11 @@ telegram_build_report() {
         fi
     fi
 
-    # Active clients from tracker_snapshot
+    # Unique IPs from tracker_snapshot
     local snapshot_file="$INSTALL_DIR/traffic_stats/tracker_snapshot"
     if [ -s "$snapshot_file" ]; then
         local active_clients=$(wc -l < "$snapshot_file" 2>/dev/null || echo 0)
-        report+="📡 Active clients: ${active_clients}"
+        report+="📡 Unique IPs served: ${active_clients}"
         report+=$'\n'
     fi
 
@@ -4203,7 +4203,7 @@ build_report() {
     local snapshot_file="$INSTALL_DIR/traffic_stats/tracker_snapshot"
     if [ -s "$snapshot_file" ]; then
         local active_clients=$(wc -l < "$snapshot_file" 2>/dev/null || echo 0)
-        report+="👤 Active clients: ${active_clients} unique IPs"
+        report+="👤 Unique IPs served: ${active_clients}"
         report+=$'\n'
     fi
 
@@ -5099,7 +5099,7 @@ _info_stats() {
     echo ""
     echo -e "  ${BOLD}Live Peers (option 4)${NC}"
     echo -e "    Full-page traffic breakdown by country. Shows:"
-    echo -e "      Total bytes, Speed (KB/s), IPs / Clients per country"
+    echo -e "      Total bytes, Speed (KB/s), Clients per country"
     echo -e "    Client counts are estimated from the snapshot"
     echo -e "    distribution scaled to actual connected count."
     echo ""
