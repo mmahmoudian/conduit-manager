@@ -10,7 +10,7 @@
                       M A N A G E R
 ```
 
-![Version](https://img.shields.io/badge/version-1.2--Beta-blue)
+![Version](https://img.shields.io/badge/version-1.2-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Linux-orange)
 ![Docker](https://img.shields.io/badge/Docker-Required-2496ED?logo=docker&logoColor=white)
@@ -18,24 +18,22 @@
 
 A powerful management tool for deploying and managing Psiphon Conduit nodes on Linux servers. Help users access the open internet during network restrictions.
 
-## Quick Install (Beta)
+## Quick Install
 
 ```bash
-curl -sL https://raw.githubusercontent.com/SamNet-dev/conduit-manager/beta-releases/conduit.sh | sudo bash
+curl -sL https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.sh | sudo bash
 ```
 
 Or download and run manually:
 
 ```bash
-wget https://raw.githubusercontent.com/SamNet-dev/conduit-manager/beta-releases/conduit.sh
+wget https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.sh
 sudo bash conduit.sh
 ```
 
-> For stable release, use `main` instead of `beta-releases` in the URL above.
+> For beta/preview releases, use `beta-releases` instead of `main` in the URL above.
 
-## v1.2-Beta Changelog
-
-> This list will grow as more features are added before the full v1.2 release.
+## What's New in v1.2
 
 **New Features**
 - Per-container CPU and memory resource limits via Settings menu
@@ -72,6 +70,7 @@ sudo bash conduit.sh
 - PID management for background processes
 - Consistent `[STATS]` grep pattern across all screens
 - Temp dir cleanup to prevent stale data reads
+- Atomic settings file writes to prevent corruption
 
 **Security**
 - Silent bot token input (not echoed)
@@ -80,6 +79,7 @@ sudo bash conduit.sh
 - BotFather privacy guidance in setup wizard
 - OPSEC warning for operators in censored regions
 - Curl calls with `--max-filesize` and `--max-time` limits
+- Secure temp directories with `mktemp`
 
 ## Features
 
@@ -146,7 +146,7 @@ conduit uninstall    # Remove all components
 
 ## Upgrading
 
-Just run the install command above. When prompted, select **"Open management menu"** — existing containers are recognized automatically. Telegram settings are preserved across upgrades.
+Just run the install command above or use `conduit update` from the menu. Existing containers are recognized automatically. Telegram settings are preserved across upgrades.
 
 ## Claim Rewards (OAT Tokens)
 
@@ -171,8 +171,6 @@ MIT License
 ## Contributing
 
 Pull requests welcome. For major changes, open an issue first.
-
-This is a **beta release** — please report any issues.
 
 ## Links
 

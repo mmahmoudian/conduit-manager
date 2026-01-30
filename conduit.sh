@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║      🚀 PSIPHON CONDUIT MANAGER v1.2-Beta                         ║
+# ║      🚀 PSIPHON CONDUIT MANAGER v1.2                             ║
 # ║                                                                   ║
 # ║  One-click setup for Psiphon Conduit                              ║
 # ║                                                                   ║
@@ -23,7 +23,7 @@
 #   -v, --verbose           increase verbosity (-v for verbose, -vv for debug)
 #
 
-set -e
+set -eo pipefail
 
 # Require bash
 if [ -z "$BASH_VERSION" ]; then
@@ -31,7 +31,7 @@ if [ -z "$BASH_VERSION" ]; then
     exit 1
 fi
 
-VERSION="1.2-Beta"
+VERSION="1.2"
 CONDUIT_IMAGE="ghcr.io/ssmirr/conduit/conduit:latest"
 INSTALL_DIR="${INSTALL_DIR:-/opt/conduit}"
 BACKUP_DIR="$INSTALL_DIR/backups"
@@ -701,7 +701,8 @@ save_settings_install() {
         _tg_label="${TELEGRAM_SERVER_LABEL:-}"
         _tg_start_hour="${TELEGRAM_START_HOUR:-0}"
     fi
-    cat > "$INSTALL_DIR/settings.conf" << EOF
+    local _tmp="$INSTALL_DIR/settings.conf.tmp.$$"
+    cat > "$_tmp" << EOF
 MAX_CLIENTS=$MAX_CLIENTS
 BANDWIDTH=$BANDWIDTH
 CONTAINER_COUNT=${CONTAINER_COUNT:-1}
@@ -720,8 +721,8 @@ TELEGRAM_WEEKLY_SUMMARY=$_tg_weekly
 TELEGRAM_SERVER_LABEL="$_tg_label"
 TELEGRAM_START_HOUR=$_tg_start_hour
 EOF
-
-    chmod 600 "$INSTALL_DIR/settings.conf" 2>/dev/null || true
+    chmod 600 "$_tmp" 2>/dev/null || true
+    mv "$_tmp" "$INSTALL_DIR/settings.conf"
 
     if [ ! -f "$INSTALL_DIR/settings.conf" ]; then
         log_error "Failed to save settings. Check disk space and permissions."
@@ -841,7 +842,7 @@ create_management_script() {
 # Reference: https://github.com/ssmirr/conduit/releases/latest
 #
 
-VERSION="1.2-Beta"
+VERSION="1.2"
 INSTALL_DIR="REPLACE_ME_INSTALL_DIR"
 BACKUP_DIR="$INSTALL_DIR/backups"
 CONDUIT_IMAGE="ghcr.io/ssmirr/conduit/conduit:latest"
@@ -1296,7 +1297,7 @@ get_container_stats() {
     for i in $(seq 1 $CONTAINER_COUNT); do
         names+=" $(get_container_name $i)"
     done
-    local all_stats=$(docker stats --no-stream --format "{{.CPUPerc}} {{.MemUsage}}" $names 2>/dev/null)
+    local all_stats=$(timeout 10 docker stats --no-stream --format "{{.CPUPerc}} {{.MemUsage}}" $names 2>/dev/null)
     if [ -z "$all_stats" ]; then
         echo "0% 0MiB"
     elif [ "$CONTAINER_COUNT" -le 1 ]; then
@@ -1970,8 +1971,8 @@ show_advanced_stats() {
 
             # Fetch docker stats and all container logs in parallel
             local adv_running_names=""
-            local _adv_tmpdir="/tmp/.conduit_adv_$$"
-            rm -rf "$_adv_tmpdir"; mkdir -p "$_adv_tmpdir"
+            local _adv_tmpdir=$(mktemp -d /tmp/.conduit_adv.XXXXXX)
+            # mktemp already created the directory
             for ci in $(seq 1 $CONTAINER_COUNT); do
                 local cname=$(get_container_name $ci)
                 if echo "$docker_ps_cache" | grep -q "^${cname}$"; then
@@ -1981,7 +1982,7 @@ show_advanced_stats() {
             done
             local adv_all_stats=""
             if [ -n "$adv_running_names" ]; then
-                ( docker stats --no-stream --format "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}" $adv_running_names > "$_adv_tmpdir/stats" 2>/dev/null ) &
+                ( timeout 10 docker stats --no-stream --format "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}" $adv_running_names > "$_adv_tmpdir/stats" 2>/dev/null ) &
             fi
             wait
             [ -f "$_adv_tmpdir/stats" ] && adv_all_stats=$(cat "$_adv_tmpdir/stats")
@@ -2243,8 +2244,8 @@ show_peers() {
             # Get actual connected clients from docker logs (parallel)
             local total_clients=0
             local docker_ps_cache=$(docker ps --format '{{.Names}}' 2>/dev/null)
-            local _peer_tmpdir="/tmp/.conduit_peer_$$"
-            rm -rf "$_peer_tmpdir"; mkdir -p "$_peer_tmpdir"
+            local _peer_tmpdir=$(mktemp -d /tmp/.conduit_peer.XXXXXX)
+            # mktemp already created the directory
             for ci in $(seq 1 $CONTAINER_COUNT); do
                 local cname=$(get_container_name $ci)
                 if echo "$docker_ps_cache" | grep -q "^${cname}$"; then
@@ -2416,8 +2417,8 @@ show_status() {
     local uptime=""
 
     # Fetch all container logs in parallel
-    local _st_tmpdir="/tmp/.conduit_st_$$"
-    rm -rf "$_st_tmpdir"; mkdir -p "$_st_tmpdir"
+    local _st_tmpdir=$(mktemp -d /tmp/.conduit_st.XXXXXX)
+    # mktemp already created the directory
     for i in $(seq 1 $CONTAINER_COUNT); do
         local cname=$(get_container_name $i)
         _c_running[$i]=false
@@ -2518,8 +2519,8 @@ show_status() {
     if [ "$running_count" -gt 0 ]; then
 
         # Run all 3 resource stat calls in parallel
-        local _rs_tmpdir="/tmp/.conduit_rs_$$"
-        rm -rf "$_rs_tmpdir"; mkdir -p "$_rs_tmpdir"
+        local _rs_tmpdir=$(mktemp -d /tmp/.conduit_rs.XXXXXX)
+        # mktemp already created the directory
         ( get_container_stats > "$_rs_tmpdir/cstats" ) &
         ( get_system_stats > "$_rs_tmpdir/sys" ) &
         ( get_net_speed > "$_rs_tmpdir/net" ) &
@@ -3389,8 +3390,8 @@ manage_containers() {
         local docker_ps_cache=$(docker ps --format '{{.Names}}' 2>/dev/null)
 
         # Collect all docker data in parallel using a temp dir
-        local _mc_tmpdir="/tmp/.conduit_mc_$$"
-        rm -rf "$_mc_tmpdir"; mkdir -p "$_mc_tmpdir"
+        local _mc_tmpdir=$(mktemp -d /tmp/.conduit_mc.XXXXXX)
+        # mktemp already created the directory
 
         local running_names=""
         for ci in $(seq 1 $CONTAINER_COUNT); do
@@ -3403,7 +3404,7 @@ manage_containers() {
         done
         # Fetch stats in parallel with logs
         if [ -n "$running_names" ]; then
-            ( docker stats --no-stream --format "{{.Name}} {{.CPUPerc}} {{.MemUsage}}" $running_names > "$_mc_tmpdir/stats" 2>/dev/null ) &
+            ( timeout 10 docker stats --no-stream --format "{{.Name}} {{.CPUPerc}} {{.MemUsage}}" $running_names > "$_mc_tmpdir/stats" 2>/dev/null ) &
         fi
         wait
 
@@ -3984,7 +3985,8 @@ set_data_cap() {
 
 # Save all settings to file
 save_settings() {
-    cat > "$INSTALL_DIR/settings.conf" << EOF
+    local _tmp="$INSTALL_DIR/settings.conf.tmp.$$"
+    cat > "$_tmp" << EOF
 MAX_CLIENTS=$MAX_CLIENTS
 BANDWIDTH=$BANDWIDTH
 CONTAINER_COUNT=$CONTAINER_COUNT
@@ -4011,12 +4013,13 @@ EOF
         local bw_var="BANDWIDTH_${i}"
         local cpu_var="CPUS_${i}"
         local mem_var="MEMORY_${i}"
-        [ -n "${!mc_var}" ] && echo "${mc_var}=${!mc_var}" >> "$INSTALL_DIR/settings.conf"
-        [ -n "${!bw_var}" ] && echo "${bw_var}=${!bw_var}" >> "$INSTALL_DIR/settings.conf"
-        [ -n "${!cpu_var}" ] && echo "${cpu_var}=${!cpu_var}" >> "$INSTALL_DIR/settings.conf"
-        [ -n "${!mem_var}" ] && echo "${mem_var}=${!mem_var}" >> "$INSTALL_DIR/settings.conf"
+        [ -n "${!mc_var}" ] && echo "${mc_var}=${!mc_var}" >> "$_tmp"
+        [ -n "${!bw_var}" ] && echo "${bw_var}=${!bw_var}" >> "$_tmp"
+        [ -n "${!cpu_var}" ] && echo "${cpu_var}=${!cpu_var}" >> "$_tmp"
+        [ -n "${!mem_var}" ] && echo "${mem_var}=${!mem_var}" >> "$_tmp"
     done
-    chmod 600 "$INSTALL_DIR/settings.conf" 2>/dev/null || true
+    chmod 600 "$_tmp" 2>/dev/null || true
+    mv "$_tmp" "$INSTALL_DIR/settings.conf"
 }
 
 # ─── Telegram Bot Functions ───────────────────────────────────────────────────
@@ -4827,7 +4830,7 @@ build_report() {
     fi
 
     # CPU / RAM
-    local stats=$(docker stats --no-stream --format "{{.CPUPerc}} {{.MemUsage}}" $(docker ps --format '{{.Names}}' 2>/dev/null | grep "^conduit") 2>/dev/null | head -1)
+    local stats=$(timeout 10 docker stats --no-stream --format "{{.CPUPerc}} {{.MemUsage}}" $(docker ps --format '{{.Names}}' 2>/dev/null | grep "^conduit") 2>/dev/null | head -1)
     local raw_cpu=$(echo "$stats" | awk '{print $1}')
     local cores=$(get_cpu_cores)
     local cpu=$(awk "BEGIN {printf \"%.1f%%\", ${raw_cpu%\%} / $cores}" 2>/dev/null || echo "$raw_cpu")
@@ -6267,7 +6270,7 @@ update_conduit() {
 
     # --- Phase 1: Script update ---
     echo "Checking for script updates..."
-    local update_url="https://raw.githubusercontent.com/SamNet-dev/conduit-manager/beta-releases/conduit.sh"
+    local update_url="https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.sh"
     local tmp_script="/tmp/conduit_update_$$.sh"
 
     if curl -sL --max-time 30 --max-filesize 2097152 -o "$tmp_script" "$update_url" 2>/dev/null; then
@@ -6645,7 +6648,7 @@ main() {
     fi
 }
 #
-# REACHED END OF SCRIPT - VERSION 1.2-Beta
+# REACHED END OF SCRIPT - VERSION 1.2
 # ###############################################################################
 main "$@"
 
