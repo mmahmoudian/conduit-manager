@@ -740,7 +740,7 @@ setup_autostart() {
 [Unit]
 Description=Psiphon Conduit Service
 After=network.target docker.service
-Requires=docker.service
+Wants=docker.service
 
 [Service]
 Type=oneshot
@@ -1893,7 +1893,7 @@ setup_tracker_service() {
 [Unit]
 Description=Conduit Traffic Tracker
 After=network.target docker.service
-Requires=docker.service
+Wants=docker.service
 
 [Service]
 Type=simple
@@ -5008,7 +5008,7 @@ setup_telegram_service() {
 [Unit]
 Description=Conduit Telegram Notifications
 After=network.target docker.service
-Requires=docker.service
+Wants=docker.service
 
 [Service]
 Type=simple
@@ -5544,8 +5544,20 @@ telegram_setup_wizard() {
 }
 
 show_menu() {
-    # Auto-fix conduit.service if it's in failed state
+    # Auto-fix systemd service files: replace hard docker dependency for snap/non-systemd Docker
     if command -v systemctl &>/dev/null; then
+        local need_reload=false
+        for svc_file in /etc/systemd/system/conduit.service /etc/systemd/system/conduit-tracker.service; do
+            if [ -f "$svc_file" ] && grep -q "Requires=docker.service" "$svc_file" 2>/dev/null; then
+                sed -i 's/Requires=docker.service/Wants=docker.service/g' "$svc_file"
+                need_reload=true
+            fi
+        done
+        if [ "$need_reload" = true ]; then
+            systemctl daemon-reload 2>/dev/null || true
+        fi
+
+        # Auto-fix conduit.service if it's in failed state
         local svc_state=$(systemctl is-active conduit.service 2>/dev/null)
         if [ "$svc_state" = "failed" ]; then
             systemctl reset-failed conduit.service 2>/dev/null || true
