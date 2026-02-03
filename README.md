@@ -82,6 +82,14 @@ sudo bash conduit.sh
 | SUSE | openSUSE Leap, openSUSE Tumbleweed |
 | Alpine | Alpine Linux |
 
+## macOS Support
+
+Looking for macOS? We have a **macOS (Apple Silicon)** version available!
+
+> **[macos-edition branch](https://github.com/SamNet-dev/conduit-manager/tree/macos-edition)** — Based on v1.0.2, developed by [@PouriaCh](https://github.com/PouriaCh)
+
+Note: The Linux version (this branch) has the latest features including Telegram bot, multi-container scaling, per-container resource limits, and live dashboard. The macOS edition provides core functionality for Apple Silicon Macs.
+
 ## CLI Reference
 
 After installation, use the `conduit` command:
@@ -286,6 +294,14 @@ sudo bash conduit.sh
 - **بررسی سلامت** — تشخیص جامع برای عیب‌یابی
 - **راهنما و اطلاعات** — راهنمای چندصفحه‌ای داخلی
 - **حذف کامل** — پاکسازی تمام فایل‌ها و تنظیمات شامل سرویس تلگرام
+
+## پشتیبانی از macOS
+
+به دنبال نسخه macOS هستید؟ نسخه **macOS (Apple Silicon)** موجود است!
+
+> **[شاخه macos-edition](https://github.com/SamNet-dev/conduit-manager/tree/macos-edition)** — بر اساس نسخه 1.0.2، توسعه داده شده توسط [@PouriaCh](https://github.com/PouriaCh)
+
+توجه: نسخه لینوکس (این شاخه) شامل جدیدترین امکانات مانند ربات تلگرام، مقیاس‌پذیری چند کانتینره، محدودیت منابع و داشبورد زنده است. نسخه macOS عملکرد اصلی را برای مک‌های Apple Silicon فراهم می‌کند.
 
 ## دستورات CLI
 
