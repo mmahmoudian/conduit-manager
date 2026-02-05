@@ -1293,7 +1293,8 @@ show_dashboard() {
             echo -e "\033[K"
         fi
 
-        echo -e "${BOLD}Refreshes every 10 seconds.  ${CYAN}[i]${NC} ${DIM}What do these numbers mean?${NC}  ${DIM}[any key] Menu${NC}\033[K"
+        echo -e "${BOLD}Refreshes every 10 seconds.${NC}\033[K"
+        echo -e "${CYAN}[i]${NC} ${DIM}What do these numbers mean?${NC}  ${DIM}[any key] Back to menu${NC}\033[K"
 
         # Clear any leftover lines below the dashboard content (Erase to End of Display)
         # This only cleans up if the dashboard gets shorter
@@ -1395,19 +1396,41 @@ get_system_stats() {
         sys_cpu="N/A"
     fi
 
-    # 2. CPU Temperature
+    # 2. CPU Temperature (cross-platform: Intel coretemp, AMD k10temp, ARM thermal)
     local cpu_temp="-"
-    # Try thermal_zone first (most common)
-    if [ -f /sys/class/thermal/thermal_zone0/temp ]; then
-        local temp_raw=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
-        if [ -n "$temp_raw" ] && [ "$temp_raw" -gt 0 ] 2>/dev/null; then
-            cpu_temp="$((temp_raw / 1000))°C"
-        fi
-    # Try hwmon as fallback
-    elif [ -f /sys/class/hwmon/hwmon0/temp1_input ]; then
-        local temp_raw=$(cat /sys/class/hwmon/hwmon0/temp1_input 2>/dev/null)
-        if [ -n "$temp_raw" ] && [ "$temp_raw" -gt 0 ] 2>/dev/null; then
-            cpu_temp="$((temp_raw / 1000))°C"
+    local temp_sum=0
+    local temp_count=0
+
+    # First try hwmon - look for CPU temperature sensors (most accurate)
+    for hwmon_dir in /sys/class/hwmon/hwmon*; do
+        [ -d "$hwmon_dir" ] || continue
+        local hwmon_name=$(cat "$hwmon_dir/name" 2>/dev/null)
+        # Match CPU thermal drivers: coretemp (Intel), k10temp (AMD), cpu_thermal/soc_thermal (ARM)
+        case "$hwmon_name" in
+            coretemp|k10temp|cpu_thermal|soc_thermal|cpu-thermal|thermal-fan-est)
+                # Read all core temperatures from this device
+                for temp_file in "$hwmon_dir"/temp*_input; do
+                    [ -f "$temp_file" ] || continue
+                    local temp_raw=$(cat "$temp_file" 2>/dev/null)
+                    if [ -n "$temp_raw" ] && [ "$temp_raw" -gt 0 ] 2>/dev/null; then
+                        temp_sum=$((temp_sum + temp_raw))
+                        temp_count=$((temp_count + 1))
+                    fi
+                done
+                ;;
+        esac
+    done
+
+    # Calculate average if we found CPU temps via hwmon
+    if [ "$temp_count" -gt 0 ]; then
+        cpu_temp="$((temp_sum / temp_count / 1000))°C"
+    else
+        # Fallback to thermal_zone (less accurate but works on most systems)
+        if [ -f /sys/class/thermal/thermal_zone0/temp ]; then
+            local temp_raw=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
+            if [ -n "$temp_raw" ] && [ "$temp_raw" -gt 0 ] 2>/dev/null; then
+                cpu_temp="$((temp_raw / 1000))°C"
+            fi
         fi
     fi
 
@@ -2865,8 +2888,10 @@ check_connection_history_reset() {
     mkdir -p "$(dirname "$CONNECTION_HISTORY_START_FILE")" 2>/dev/null
     echo "$current_start" > "$CONNECTION_HISTORY_START_FILE"
 
-    # Clear history file
+    # Clear history file and invalidate average cache
     rm -f "$CONNECTION_HISTORY_FILE" 2>/dev/null
+    _AVG_CONN_CACHE=""
+    _AVG_CONN_CACHE_TIME=0
 }
 
 # Record current connection count to history (called every ~5 minutes)
@@ -2898,12 +2923,26 @@ record_connection_history() {
     fi
 }
 
-# Get average connections since container started
+# Average connections cache (recalculate every 5 minutes)
+_AVG_CONN_CACHE=""
+_AVG_CONN_CACHE_TIME=0
+
+# Get average connections since container started (cached for 5 min)
 get_average_connections() {
+    local now=$(date +%s)
+
+    # Return cached value if less than 5 minutes old
+    if [ -n "$_AVG_CONN_CACHE" ] && [ $((now - _AVG_CONN_CACHE_TIME)) -lt 300 ]; then
+        echo "$_AVG_CONN_CACHE"
+        return
+    fi
+
     # Check if containers restarted (clear stale history)
     check_connection_history_reset
 
     if [ ! -f "$CONNECTION_HISTORY_FILE" ]; then
+        _AVG_CONN_CACHE="-"
+        _AVG_CONN_CACHE_TIME=$now
         echo "-"
         return
     fi
@@ -2914,7 +2953,9 @@ get_average_connections() {
         END { if (count > 0) printf "%.0f", sum/count; else print "-" }
     ' "$CONNECTION_HISTORY_FILE" 2>/dev/null)
 
-    echo "${avg:--}"
+    _AVG_CONN_CACHE="${avg:--}"
+    _AVG_CONN_CACHE_TIME=$now
+    echo "$_AVG_CONN_CACHE"
 }
 
 # Get connection snapshot from N hours ago (returns "connected|connecting" or "-|-")
