@@ -171,7 +171,7 @@ The interactive menu (`conduit menu`) provides access to all features:
 | 1 Core | < 1 GB | 1 | 100 |
 | 2 Cores | 2 GB | 1–2 | 200 |
 | 4 Cores | 4 GB+ | 2–3 | 400 |
-| 8+ Cores | 8 GB+ | 3–5 | 800 |
+| 8+ Cores | 8 GB+ | 3+ | 800 |
 
 ## Installation Options
 
@@ -380,7 +380,7 @@ conduit help         # راهنما
 | ۱ هسته | کمتر از ۱ گیگ | ۱ | ۱۰۰ |
 | ۲ هسته | ۲ گیگ | ۱–۲ | ۲۰۰ |
 | ۴ هسته | ۴ گیگ+ | ۲–۳ | ۴۰۰ |
-| ۸+ هسته | ۸ گیگ+ | ۳–۵ | ۸۰۰ |
+| ۸+ هسته | ۸ گیگ+ | ۳+ | ۸۰۰ |
 
 ## گزینه‌های نصب
 

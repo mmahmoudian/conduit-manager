@@ -339,6 +339,20 @@ calculate_recommended_clients() {
     fi
 }
 
+get_container_cpus() {
+    local idx=${1:-1}
+    local var="CPUS_${idx}"
+    local val="${!var}"
+    echo "${val:-${DOCKER_CPUS:-}}"
+}
+
+get_container_memory() {
+    local idx=${1:-1}
+    local var="MEMORY_${idx}"
+    local val="${!var}"
+    echo "${val:-${DOCKER_MEMORY:-}}"
+}
+
 #═══════════════════════════════════════════════════════════════════════
 # Interactive Setup
 #═══════════════════════════════════════════════════════════════════════
@@ -426,18 +440,29 @@ prompt_settings() {
     # Detect CPU cores and RAM for recommendation
     local cpu_cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
     local ram_mb=$(awk '/MemTotal/{printf "%.0f", $2/1024}' /proc/meminfo 2>/dev/null || echo 512)
-    local rec_containers=2
+    local ram_gb=$(( ram_mb / 1024 ))
+    local rec_containers=1
+    local rec_cap=32
     if [ "$cpu_cores" -le 1 ] || [ "$ram_mb" -lt 1024 ]; then
         rec_containers=1
-    elif [ "$cpu_cores" -ge 4 ] && [ "$ram_mb" -ge 4096 ]; then
-        rec_containers=3
+    else
+        # Heuristic: recommend up to 2 containers per CPU core,
+        # bounded by available RAM in GB.
+        local rec_by_cpu=$(( cpu_cores * 2 ))
+        local rec_by_ram=$(( ram_gb > 0 ? ram_gb : 1 ))
+    
+        rec_containers=$(( rec_by_cpu < rec_by_ram ? rec_by_cpu : rec_by_ram ))
+    
+        # Safety bounds
+        [ "$rec_containers" -lt 1 ] && rec_containers=1
+        [ "$rec_containers" -gt "$rec_cap" ] && rec_containers="$rec_cap"
     fi
 
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
-    echo -e "  How many Conduit containers to run? (1-5)"
+    echo -e "  How many Conduit containers to run? (1+)"
     echo -e "  More containers = more connections served"
     echo ""
-    echo -e "  ${DIM}System: ${cpu_cores} CPU core(s), ${ram_mb}MB RAM${NC}"
+    echo -e "  ${DIM}System: ${cpu_cores} CPU core(s), ${ram_mb}MB RAM (~${ram_gb}GB)${NC}"
     if [ "$cpu_cores" -le 1 ] || [ "$ram_mb" -lt 1024 ]; then
         echo -e "  ${YELLOW}⚠ Low-end system detected. Recommended: 1 container.${NC}"
         echo -e "  ${YELLOW}  Multiple containers may cause high CPU and instability.${NC}"
@@ -453,8 +478,15 @@ prompt_settings() {
 
     if [ -z "$input_containers" ]; then
         CONTAINER_COUNT=$rec_containers
-    elif [[ "$input_containers" =~ ^[1-5]$ ]]; then
+    elif [[ "$input_containers" =~ ^[1-9][0-9]*$ ]]; then
         CONTAINER_COUNT=$input_containers
+        if [ "$CONTAINER_COUNT" -gt 32 ]; then
+            log_warn "Maximum is 32 containers. Setting to 32."
+            CONTAINER_COUNT=32
+        elif [ "$CONTAINER_COUNT" -gt "$rec_containers" ]; then
+            echo -e "  ${YELLOW}Note:${NC} You chose ${CONTAINER_COUNT}, which is above the recommended ${rec_containers}."
+            echo -e "  ${DIM}  This may cause diminishing returns, higher CPU usage, or instability depending on workload.${NC}"
+        fi
     else
         log_warn "Invalid input. Using default: ${rec_containers}"
         CONTAINER_COUNT=$rec_containers
@@ -1103,7 +1135,7 @@ show_qr_code() {
         done
         echo ""
         read -p "  Which container? (1-${CONTAINER_COUNT}): " idx < /dev/tty || true
-        if ! [[ "$idx" =~ ^[1-5]$ ]] || [ "$idx" -gt "$CONTAINER_COUNT" ]; then
+        if ! [[ "$idx" =~ ^[1-9][0-9]*$ ]] || [ "$idx" -gt "$CONTAINER_COUNT" ]; then
             echo -e "${RED}  Invalid selection.${NC}"
             return
         fi
@@ -2776,14 +2808,21 @@ stop_conduit() {
             stopped=$((stopped + 1))
         fi
     done
-    # Also stop any extra containers beyond current count (from previous scaling)
-    for i in $(seq $((CONTAINER_COUNT + 1)) 5); do
-        local name=$(get_container_name $i)
-        if docker ps -a 2>/dev/null | grep -q "[[:space:]]${name}$"; then
-            docker stop "$name" 2>/dev/null || true
-            docker rm "$name" 2>/dev/null || true
-            echo -e "${YELLOW}✓ ${name} stopped and removed (extra)${NC}"
-        fi
+    # Also stop/remove any extra Conduit containers beyond current count (from previous scaling)
+    # This avoids hardcoding a max (previously 5) by discovering matching containers dynamically.
+    local base_name="$(get_container_name 1)"
+    local idx
+    docker ps -a --format '{{.Names}}' 2>/dev/null | while read -r cname; do
+        case "$cname" in
+            "${base_name%1}"*)
+                idx="${cname##*[!0-9]}"
+                if [[ "$idx" =~ ^[0-9]+$ ]] && [ "$idx" -gt "$CONTAINER_COUNT" ]; then
+                    docker stop "$cname" 2>/dev/null || true
+                    docker rm "$cname" 2>/dev/null || true
+                    echo -e "${YELLOW}✓ ${cname} stopped and removed (extra)${NC}"
+                fi
+                ;;
+        esac
     done
     [ "$stopped" -eq 0 ] && echo -e "${YELLOW}No Conduit containers are running${NC}"
     # Stop background tracker
@@ -2896,13 +2935,14 @@ restart_conduit() {
             fi
         fi
     done
-    # Remove extra containers beyond current count
-    for i in $(seq $((CONTAINER_COUNT + 1)) 5); do
-        local name=$(get_container_name $i)
-        if docker ps -a 2>/dev/null | grep -q "[[:space:]]${name}$"; then
-            docker stop "$name" 2>/dev/null || true
-            docker rm "$name" 2>/dev/null || true
-            echo -e "${YELLOW}✓ ${name} removed (scaled down)${NC}"
+    # Remove extra containers beyond current count (dynamic, no hard max)
+    docker ps -a --format '{{.Names}}' 2>/dev/null | while read -r cname; do
+        [[ "$cname" =~ ^conduit(-([0-9]+))?$ ]] || continue
+        local idx="${BASH_REMATCH[2]:-1}"
+        if [ "$idx" -gt "$CONTAINER_COUNT" ]; then
+            docker stop "$cname" 2>/dev/null || true
+            docker rm "$cname" 2>/dev/null || true
+            echo -e "${YELLOW}✓ ${cname} removed (scaled down)${NC}"
         fi
     done
     # Stop tracker before backup to avoid racing with writes
@@ -3010,7 +3050,7 @@ change_settings() {
         # Apply to all = update global defaults and clear per-container overrides
         [ -n "$valid_mc" ] && MAX_CLIENTS="$valid_mc"
         [ -n "$valid_bw" ] && BANDWIDTH="$valid_bw"
-        for i in $(seq 1 5); do
+        for i in $(seq 1 "$CONTAINER_COUNT"); do
             unset "MAX_CLIENTS_${i}" 2>/dev/null || true
             unset "BANDWIDTH_${i}" 2>/dev/null || true
         done
@@ -3088,7 +3128,7 @@ change_resource_limits() {
     if [ "$target" = "c" ] || [ "$target" = "C" ]; then
         DOCKER_CPUS=""
         DOCKER_MEMORY=""
-        for i in $(seq 1 5); do
+        for i in $(seq 1 "$CONTAINER_COUNT"); do
             unset "CPUS_${i}" 2>/dev/null || true
             unset "MEMORY_${i}" 2>/dev/null || true
         done
@@ -3196,7 +3236,7 @@ change_resource_limits() {
     if [ "$target" = "a" ] || [ "$target" = "A" ]; then
         [ -n "$valid_cpus" ] && DOCKER_CPUS="$valid_cpus"
         [ -n "$valid_mem" ] && DOCKER_MEMORY="$valid_mem"
-        for i in $(seq 1 5); do
+        for i in $(seq 1 "$CONTAINER_COUNT"); do
             unset "CPUS_${i}" 2>/dev/null || true
             unset "MEMORY_${i}" 2>/dev/null || true
         done
@@ -3333,8 +3373,8 @@ uninstall_all() {
 
     echo ""
     echo -e "${BLUE}[INFO]${NC} Stopping Conduit container(s)..."
-    for i in $(seq 1 5); do
-        local name=$(get_container_name $i)
+    docker ps -a --format '{{.Names}}' 2>/dev/null | while read -r name; do
+        [[ "$name" =~ ^conduit(-([0-9]+))?$ ]] || continue
         docker stop "$name" 2>/dev/null || true
         docker rm -f "$name" 2>/dev/null || true
     done
@@ -3343,8 +3383,8 @@ uninstall_all() {
     docker rmi "$CONDUIT_IMAGE" 2>/dev/null || true
 
     echo -e "${BLUE}[INFO]${NC} Removing Conduit data volume(s)..."
-    for i in $(seq 1 5); do
-        local vol=$(get_volume_name $i)
+    docker volume ls --format '{{.Name}}' 2>/dev/null | while read -r vol; do
+        [[ "$vol" =~ ^conduit-data(-([0-9]+))?$ ]] || continue
         docker volume rm "$vol" 2>/dev/null || true
     done
 
@@ -3417,7 +3457,7 @@ manage_containers() {
 
         echo -e "${EL}"
         echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}${EL}"
-        echo -e "${CYAN}  MANAGE CONTAINERS${NC}    ${GREEN}${CONTAINER_COUNT}${NC}/5  Host networking${EL}"
+        echo -e "${CYAN}  MANAGE CONTAINERS${NC}    ${GREEN}${CONTAINER_COUNT}${NC}  Host networking${EL}"
         echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}${EL}"
         echo -e "${EL}"
 
@@ -3450,7 +3490,7 @@ manage_containers() {
             "#" "Container" "Status" "Clients" "Up" "Down" "CPU" "RAM"
         echo -e "  ${CYAN}─────────────────────────────────────────────────────────${NC}${EL}"
 
-        for ci in $(seq 1 5); do
+        for ci in $(seq 1 "$CONTAINER_COUNT"); do
             local cname=$(get_container_name $ci)
             local status_text status_color
             local c_clients="-" c_up="-" c_down="-" c_cpu="-" c_ram="-"
@@ -3499,8 +3539,12 @@ manage_containers() {
 
         echo -e "${EL}"
         echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}${EL}"
-        local max_add=$((5 - CONTAINER_COUNT))
-        [ "$max_add" -gt 0 ] && echo -e "  ${GREEN}[a]${NC} Add container(s)      (max: ${max_add} more)${EL}"
+        local max_add=$(( rec_containers - CONTAINER_COUNT ))
+        if [ "$max_add" -gt 0 ]; then
+            echo -e "  ${GREEN}[a]${NC} Add container(s)      (recommended max: ${rec_containers})${EL}"
+        else
+            echo -e "  ${YELLOW}[a]${NC} Add container(s)      (above recommendation)${EL}"
+        fi
         [ "$CONTAINER_COUNT" -gt 1 ] && echo -e "  ${RED}[r]${NC} Remove container(s)   (min: 1 required)${EL}"
         echo -e "  ${GREEN}[s]${NC} Start a container${EL}"
         echo -e "  ${RED}[t]${NC} Stop a container${EL}"
@@ -3530,20 +3574,21 @@ manage_containers() {
 
         case "$mc_choice" in
             a)
-                if [ "$CONTAINER_COUNT" -ge 5 ]; then
-                    echo -e "  ${RED}Already at maximum (5).${NC}"
-                    read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
-                    continue
-                fi
-                local max_add=$((5 - CONTAINER_COUNT))
-                read -p "  How many to add? (1-${max_add}): " add_count < /dev/tty || true
-                if ! [[ "$add_count" =~ ^[0-9]+$ ]] || [ "$add_count" -lt 1 ] || [ "$add_count" -gt "$max_add" ]; then
+                read -p "  How many to add? (1+): " add_count < /dev/tty || true
+                if ! [[ "$add_count" =~ ^[1-9][0-9]*$ ]]; then
                     echo -e "  ${RED}Invalid.${NC}"
                     read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
                     continue
                 fi
                 local old_count=$CONTAINER_COUNT
                 CONTAINER_COUNT=$((CONTAINER_COUNT + add_count))
+                if [ "$CONTAINER_COUNT" -gt 32 ]; then
+                    echo -e " ${RED}Maximum is 32 containers. Capping at 32.${NC}"
+                    CONTAINER_COUNT=32
+                elif [ "$CONTAINER_COUNT" -gt "$rec_containers" ]; then
+                    echo -e "  ${YELLOW}Note:${NC} Total containers (${CONTAINER_COUNT}) exceed recommended (${rec_containers})."
+                    echo -e "  ${DIM}  Expect diminishing returns or higher resource usage.${NC}"
+                fi
 
                 # Ask if user wants to set resource limits on new containers
                 local set_limits=""
@@ -3659,6 +3704,13 @@ manage_containers() {
                 fi
                 local old_count=$CONTAINER_COUNT
                 CONTAINER_COUNT=$((CONTAINER_COUNT - rm_count))
+                # Cleanup per-container overrides beyond new container count
+                for i in $(seq $((CONTAINER_COUNT + 1)) "$old_count"); do
+                    unset "CPUS_${i}" \
+                          "MEMORY_${i}" \
+                          "MAX_CLIENTS_${i}" \
+                          "BANDWIDTH_${i}" 2>/dev/null || true
+                done
                 save_settings
                 # Remove containers in parallel
                 local _rm_pids=() _rm_names=()
@@ -3682,7 +3734,7 @@ manage_containers() {
                 local sc_targets=()
                 if [ "$sc_idx" = "all" ]; then
                     for i in $(seq 1 $CONTAINER_COUNT); do sc_targets+=($i); done
-                elif [[ "$sc_idx" =~ ^[1-5]$ ]] && [ "$sc_idx" -le "$CONTAINER_COUNT" ]; then
+                elif [[ "$sc_idx" =~ ^[1-9][0-9]*$ ]] && [ "$sc_idx" -le "$CONTAINER_COUNT" ]; then
                     sc_targets+=($sc_idx)
                 else
                     echo -e "  ${RED}Invalid.${NC}"
@@ -3760,7 +3812,7 @@ manage_containers() {
                             echo -e "  ${YELLOW}  ${_stop_names[$idx]} was not running${NC}"
                         fi
                     done
-                elif [[ "$sc_idx" =~ ^[1-5]$ ]] && [ "$sc_idx" -le "$CONTAINER_COUNT" ]; then
+                elif [[ "$sc_idx" =~ ^[1-9][0-9]*$ ]] && [ "$sc_idx" -le "$CONTAINER_COUNT" ]; then
                     local name=$(get_container_name $sc_idx)
                     if docker stop -t 3 "$name" 2>/dev/null; then
                         echo -e "  ${YELLOW}✓ ${name} stopped${NC}"
@@ -3785,7 +3837,7 @@ manage_containers() {
                         echo -e "  ${GREEN}✓ Tracker data snapshot saved${NC}"
                     fi
                     for i in $(seq 1 $CONTAINER_COUNT); do xc_targets+=($i); done
-                elif [[ "$sc_idx" =~ ^[1-5]$ ]] && [ "$sc_idx" -le "$CONTAINER_COUNT" ]; then
+                elif [[ "$sc_idx" =~ ^[1-9][0-9]*$ ]] && [ "$sc_idx" -le "$CONTAINER_COUNT" ]; then
                     xc_targets+=($sc_idx)
                 else
                     echo -e "  ${RED}Invalid.${NC}"
@@ -4044,7 +4096,7 @@ DOCKER_MEMORY=${DOCKER_MEMORY:-}
 TRACKER_ENABLED=${TRACKER_ENABLED:-true}
 EOF
     # Save per-container overrides
-    for i in $(seq 1 5); do
+    for i in $(seq 1 "$CONTAINER_COUNT"); do
         local mc_var="MAX_CLIENTS_${i}"
         local bw_var="BANDWIDTH_${i}"
         local cpu_var="CPUS_${i}"
@@ -4123,7 +4175,7 @@ If a container gets stuck and is auto-restarted, you will receive an immediate a
 /stop\_N — Stop container N (e.g. /stop\_2)
 /restart\_N — Restart container N (e.g. /restart\_1)
 
-Replace N with the container number (1-5).
+Replace N with the container number (1+).
 
 ━━━━━━━━━━━━━━━━━━━━
 📊 *Your first report:*
@@ -5922,13 +5974,13 @@ _info_containers() {
     echo -e "  ${BOLD}Naming${NC}"
     echo -e "    Container 1: ${CYAN}conduit${NC}      Volume: ${CYAN}conduit-data${NC}"
     echo -e "    Container 2: ${CYAN}conduit-2${NC}    Volume: ${CYAN}conduit-data-2${NC}"
-    echo -e "    Container 3: ${CYAN}conduit-3${NC}    Volume: ${CYAN}conduit-data-3${NC}"
-    echo -e "    ...up to 5 containers."
+    echo -e "    Container N: ${CYAN}conduit-N${NC}    Volume: ${CYAN}conduit-data-N${NC}"
+    echo -e "    (Currently configured: 1–${CONTAINER_COUNT})"
     echo ""
     echo -e "  ${BOLD}Scaling recommendations${NC}"
     echo -e "    ${YELLOW}1 CPU / <1GB RAM:${NC}  Stick with 1 container"
     echo -e "    ${YELLOW}2 CPUs / 2GB RAM:${NC}  1-2 containers"
-    echo -e "    ${GREEN}4+ CPUs / 4GB RAM:${NC} 3-5 containers"
+    echo -e "    ${GREEN}4+ CPUs / 4GB+ RAM:${NC} 3-5+ containers"
     echo -e "  Each container uses ~50MB RAM per 100 clients."
     echo ""
     echo -e "  ${BOLD}Per-container settings${NC}"
@@ -5996,7 +6048,7 @@ show_help() {
     echo "  restart   Restart Conduit container"
     echo "  update    Update to latest Conduit image"
     echo "  settings  Change max-clients/bandwidth"
-    echo "  scale     Scale containers (1-5)"
+    echo "  scale     Scale containers (1+)"
     echo "  backup    Backup Conduit node identity key"
     echo "  restore   Restore Conduit node identity from backup"
     echo "  uninstall Remove everything (container, data, service)"
@@ -6587,13 +6639,16 @@ uninstall() {
     
     echo ""
     log_info "Stopping Conduit container(s)..."
-    for i in 1 2 3 4 5; do
-        local cname="conduit"
-        local vname="conduit-data"
-        [ "$i" -gt 1 ] && cname="conduit-${i}" && vname="conduit-data-${i}"
-        docker stop "$cname" 2>/dev/null || true
-        docker rm -f "$cname" 2>/dev/null || true
-        docker volume rm "$vname" 2>/dev/null || true
+
+    docker ps -a --format '{{.Names}}' 2>/dev/null | while read -r name; do
+        [[ "$name" =~ ^conduit(-([0-9]+))?$ ]] || continue
+        docker stop "$name" 2>/dev/null || true
+        docker rm -f "$name" 2>/dev/null || true
+    done
+
+    docker volume ls --format '{{.Name}}' 2>/dev/null | while read -r vol; do
+        [[ "$vol" =~ ^conduit-data(-([0-9]+))?$ ]] || continue
+        docker volume rm "$vol" 2>/dev/null || true
     done
 
     log_info "Removing Conduit Docker image..."
@@ -6798,12 +6853,11 @@ SVCEOF
 
     # Step 3: Start Conduit container
     log_info "Step 3/5: Starting Conduit..."
-    # Clean up any existing containers from previous install/scaling
-    docker stop conduit 2>/dev/null || true
-    docker rm -f conduit 2>/dev/null || true
-    for i in 2 3 4 5; do
-        docker stop "conduit-${i}" 2>/dev/null || true
-        docker rm -f "conduit-${i}" 2>/dev/null || true
+    # Clean up any existing Conduit containers from previous install/scaling (dynamic)
+    docker ps -a --format '{{.Names}}' 2>/dev/null | while read -r name; do
+        [[ "$name" =~ ^conduit(-[0-9]+)?$ ]] || continue
+        docker stop "$name" 2>/dev/null || true
+        docker rm -f "$name" 2>/dev/null || true
     done
     run_conduit
     
