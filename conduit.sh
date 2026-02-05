@@ -438,28 +438,20 @@ prompt_settings() {
     echo ""
 
     # Detect CPU cores and RAM for recommendation
+    # 1 container per core, limited by RAM (1 per GB)
     local cpu_cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
     local ram_mb=$(awk '/MemTotal/{printf "%.0f", $2/1024}' /proc/meminfo 2>/dev/null || echo 512)
     local ram_gb=$(( ram_mb / 1024 ))
-    local rec_containers=1
     local rec_cap=32
-    if [ "$cpu_cores" -le 1 ] || [ "$ram_mb" -lt 1024 ]; then
-        rec_containers=1
-    else
-        # Heuristic: recommend up to 2 containers per CPU core,
-        # bounded by available RAM in GB.
-        local rec_by_cpu=$(( cpu_cores * 2 ))
-        local rec_by_ram=$(( ram_gb > 0 ? ram_gb : 1 ))
-    
-        rec_containers=$(( rec_by_cpu < rec_by_ram ? rec_by_cpu : rec_by_ram ))
-    
-        # Safety bounds
-        [ "$rec_containers" -lt 1 ] && rec_containers=1
-        [ "$rec_containers" -gt "$rec_cap" ] && rec_containers="$rec_cap"
-    fi
+    local rec_by_cpu=$cpu_cores
+    local rec_by_ram=$ram_gb
+    [ "$rec_by_ram" -lt 1 ] && rec_by_ram=1
+    local rec_containers=$(( rec_by_cpu < rec_by_ram ? rec_by_cpu : rec_by_ram ))
+    [ "$rec_containers" -lt 1 ] && rec_containers=1
+    [ "$rec_containers" -gt "$rec_cap" ] && rec_containers="$rec_cap"
 
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
-    echo -e "  How many Conduit containers to run? (1+)"
+    echo -e "  How many Conduit containers to run? [1-32]"
     echo -e "  More containers = more connections served"
     echo ""
     echo -e "  ${DIM}System: ${cpu_cores} CPU core(s), ${ram_mb}MB RAM (~${ram_gb}GB)${NC}"
@@ -703,7 +695,7 @@ run_conduit() {
     done
 
     sleep 3
-    if docker ps | grep -q conduit; then
+    if [ -n "$(docker ps -q --filter name=conduit 2>/dev/null)" ]; then
         if [ "$BANDWIDTH" == "-1" ]; then
             log_success "Settings: max-clients=$MAX_CLIENTS, bandwidth=Unlimited, containers=$count"
         else
@@ -3443,6 +3435,16 @@ manage_containers() {
     local stop_manage=0
     trap 'stop_manage=1' SIGINT SIGTERM
 
+    # Calculate recommendation (1 container per core, limited by RAM)
+    local cpu_cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
+    local ram_gb=$(awk '/MemTotal/{printf "%.0f", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo 1)
+    local rec_by_cpu=$cpu_cores
+    local rec_by_ram=$ram_gb
+    [ "$rec_by_ram" -lt 1 ] && rec_by_ram=1
+    local rec_containers=$(( rec_by_cpu < rec_by_ram ? rec_by_cpu : rec_by_ram ))
+    [ "$rec_containers" -lt 1 ] && rec_containers=1
+    [ "$rec_containers" -gt 32 ] && rec_containers=32
+
     tput smcup 2>/dev/null || true
     echo -ne "\033[?25l"
     printf "\033[2J\033[H"
@@ -3574,7 +3576,13 @@ manage_containers() {
 
         case "$mc_choice" in
             a)
-                read -p "  How many to add? (1+): " add_count < /dev/tty || true
+                local max_can_add=$((32 - CONTAINER_COUNT))
+                if [ "$max_can_add" -le 0 ]; then
+                    echo -e "  ${RED}Already at maximum (32 containers).${NC}"
+                    read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+                    continue
+                fi
+                read -p "  How many to add? [1-${max_can_add}]: " add_count < /dev/tty || true
                 if ! [[ "$add_count" =~ ^[1-9][0-9]*$ ]]; then
                     echo -e "  ${RED}Invalid.${NC}"
                     read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
