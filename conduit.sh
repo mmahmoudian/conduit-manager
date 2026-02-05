@@ -1360,23 +1360,23 @@ get_cpu_cores() {
 }
 
 get_system_stats() {
-    # Get System CPU (Live Delta) and RAM
-    # Returns: "CPU_PERCENT RAM_USED RAM_TOTAL RAM_PCT"
-    
+    # Get System CPU (Live Delta), CPU Temp, and RAM
+    # Returns: "CPU_PERCENT CPU_TEMP RAM_USED RAM_TOTAL RAM_PCT"
+
     # 1. System CPU (Stateful Average)
     local sys_cpu="0%"
     local cpu_tmp="/tmp/conduit_cpu_state"
-    
+
     if [ -f /proc/stat ]; then
         read -r cpu user nice system idle iowait irq softirq steal guest < /proc/stat
         local total_curr=$((user + nice + system + idle + iowait + irq + softirq + steal))
         local work_curr=$((user + nice + system + irq + softirq + steal))
-        
+
         if [ -f "$cpu_tmp" ]; then
             read -r total_prev work_prev < "$cpu_tmp"
             local total_delta=$((total_curr - total_prev))
             local work_delta=$((work_curr - work_prev))
-            
+
             if [ "$total_delta" -gt 0 ]; then
                 local cpu_usage=$(awk -v w="$work_delta" -v t="$total_delta" 'BEGIN { printf "%.1f", w * 100 / t }' 2>/dev/null || echo 0)
                 sys_cpu="${cpu_usage}%"
@@ -1384,18 +1384,34 @@ get_system_stats() {
         else
             sys_cpu="Calc..." # First run calibration
         fi
-        
+
         # Save current state for next run
         echo "$total_curr $work_curr" > "$cpu_tmp"
     else
         sys_cpu="N/A"
     fi
-    
-    # 2. System RAM (Used, Total, Percentage)
+
+    # 2. CPU Temperature
+    local cpu_temp="-"
+    # Try thermal_zone first (most common)
+    if [ -f /sys/class/thermal/thermal_zone0/temp ]; then
+        local temp_raw=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
+        if [ -n "$temp_raw" ] && [ "$temp_raw" -gt 0 ] 2>/dev/null; then
+            cpu_temp="$((temp_raw / 1000))°C"
+        fi
+    # Try hwmon as fallback
+    elif [ -f /sys/class/hwmon/hwmon0/temp1_input ]; then
+        local temp_raw=$(cat /sys/class/hwmon/hwmon0/temp1_input 2>/dev/null)
+        if [ -n "$temp_raw" ] && [ "$temp_raw" -gt 0 ] 2>/dev/null; then
+            cpu_temp="$((temp_raw / 1000))°C"
+        fi
+    fi
+
+    # 3. System RAM (Used, Total, Percentage)
     local sys_ram_used="N/A"
     local sys_ram_total="N/A"
     local sys_ram_pct="N/A"
-    
+
     if command -v free &>/dev/null; then
         # Single free -m call: MiB values for percentage + display
         local free_out=$(free -m 2>/dev/null)
@@ -1409,8 +1425,8 @@ get_system_stats() {
             }')
         fi
     fi
-    
-    echo "$sys_cpu $sys_ram_used $sys_ram_total $sys_ram_pct"
+
+    echo "$sys_cpu $cpu_temp $sys_ram_used $sys_ram_total $sys_ram_pct"
 }
 
 show_live_stats() {
@@ -2607,9 +2623,12 @@ show_status() {
         local app_ram=$(echo "$stats" | awk '{print $2, $3, $4}')
 
         local sys_cpu=$(echo "$sys_stats" | awk '{print $1}')
-        local sys_ram_used=$(echo "$sys_stats" | awk '{print $2}')
-        local sys_ram_total=$(echo "$sys_stats" | awk '{print $3}')
-        local sys_ram_pct=$(echo "$sys_stats" | awk '{print $4}')
+        local sys_temp=$(echo "$sys_stats" | awk '{print $2}')
+        local sys_ram_used=$(echo "$sys_stats" | awk '{print $3}')
+        local sys_ram_total=$(echo "$sys_stats" | awk '{print $4}')
+        local sys_ram_pct=$(echo "$sys_stats" | awk '{print $5}')
+        local sys_cpu_display="$sys_cpu"
+        [ "$sys_temp" != "-" ] && sys_cpu_display="${sys_cpu} (${sys_temp})"
 
         local rx_mbps=$(echo "$net_speed" | awk '{print $1}')
         local tx_mbps=$(echo "$net_speed" | awk '{print $2}')
@@ -2629,7 +2648,7 @@ show_status() {
             echo -e "${EL}"
             echo -e "${CYAN}═══ Resource Usage ═══${NC}${EL}"
             printf "  %-8s CPU: ${YELLOW}%-20s${NC} | RAM: ${YELLOW}%-20s${NC}${EL}\n" "App:" "$app_cpu_display" "$app_ram"
-            printf "  %-8s CPU: ${YELLOW}%-20s${NC} | RAM: ${YELLOW}%-20s${NC}${EL}\n" "System:" "$sys_cpu" "$sys_ram_used / $sys_ram_total"
+            printf "  %-8s CPU: ${YELLOW}%-20s${NC} | RAM: ${YELLOW}%-20s${NC}${EL}\n" "System:" "$sys_cpu_display" "$sys_ram_used / $sys_ram_total"
             printf "  %-8s Net: ${YELLOW}%-43s${NC}${EL}\n" "Total:" "$net_display"
 
 
@@ -2639,7 +2658,7 @@ show_status() {
              echo -e "${EL}"
              echo -e "${CYAN}═══ Resource Usage ═══${NC}${EL}"
              printf "  %-8s CPU: ${YELLOW}%-20s${NC} | RAM: ${YELLOW}%-20s${NC}${EL}\n" "App:" "$app_cpu_display" "$app_ram"
-             printf "  %-8s CPU: ${YELLOW}%-20s${NC} | RAM: ${YELLOW}%-20s${NC}${EL}\n" "System:" "$sys_cpu" "$sys_ram_used / $sys_ram_total"
+             printf "  %-8s CPU: ${YELLOW}%-20s${NC} | RAM: ${YELLOW}%-20s${NC}${EL}\n" "System:" "$sys_cpu_display" "$sys_ram_used / $sys_ram_total"
              printf "  %-8s Net: ${YELLOW}%-43s${NC}${EL}\n" "Total:" "$net_display"
              echo -e "${EL}"
              echo -e "  Stats:        ${YELLOW}Waiting for first stats...${NC}${EL}"
