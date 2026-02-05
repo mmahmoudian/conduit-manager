@@ -1293,7 +1293,7 @@ show_dashboard() {
             echo -e "\033[K"
         fi
 
-        echo -e "${BOLD}Refreshes every 5 seconds. Press any key to return to menu...${NC}\033[K"
+        echo -e "${BOLD}Refreshes every 10 seconds. Press any key to return to menu...${NC}\033[K"
         
         # Clear any leftover lines below the dashboard content (Erase to End of Display)
         # This only cleans up if the dashboard gets shorter
@@ -1301,9 +1301,9 @@ show_dashboard() {
             printf "\033[J"
         fi
         
-        # Wait 4 seconds for keypress (compensating for processing time)
+        # Wait 10 seconds for keypress (balances responsiveness with CPU usage)
         # Redirect from /dev/tty ensures it works when the script is piped
-        if read -t 4 -n 1 -s < /dev/tty 2>/dev/null; then
+        if read -t 10 -n 1 -s < /dev/tty 2>/dev/null; then
             stop_dashboard=1
         fi
     done
@@ -1630,9 +1630,14 @@ touch "$STATS_FILE" "$IPS_FILE"
 TCPDUMP_BIN=$(command -v tcpdump 2>/dev/null || echo "tcpdump")
 AWK_BIN=$(command -v gawk 2>/dev/null || command -v awk 2>/dev/null || echo "awk")
 
-# Detect local IP
+# Detect local IP and primary external interface
 LOCAL_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
 [ -z "$LOCAL_IP" ] && LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+
+# Detect primary external interface (to avoid double-counting on docker bridges)
+CAPTURE_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
+[ -z "$CAPTURE_IFACE" ] && CAPTURE_IFACE=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+[ -z "$CAPTURE_IFACE" ] && CAPTURE_IFACE="any"
 
 # Batch process: resolve GeoIP + merge into cumulative files in bulk
 process_batch() {
@@ -1861,7 +1866,7 @@ while true; do
                 break
             fi
         fi
-    done < <($TCPDUMP_BIN -tt -l -ni any -n -q -s 96 "(tcp or udp) and not port 22" 2>/dev/null | $AWK_BIN -v local_ip="$LOCAL_IP" '
+    done < <($TCPDUMP_BIN -tt -l -ni "$CAPTURE_IFACE" -n -q -s 96 "(tcp or udp) and not port 22" 2>/dev/null | $AWK_BIN -v local_ip="$LOCAL_IP" '
     BEGIN { last_sync = 0; OFMT = "%.0f"; CONVFMT = "%.0f" }
     {
         # Parse timestamp
@@ -2035,7 +2040,7 @@ show_advanced_stats() {
                 local cname=$(get_container_name $ci)
                 if echo "$docker_ps_cache" | grep -q "^${cname}$"; then
                     adv_running_names+=" $cname"
-                    ( docker logs --tail 30 "$cname" 2>&1 | grep "\[STATS\]" | tail -1 > "$_adv_tmpdir/logs_${ci}" ) &
+                    ( docker logs --tail 200 "$cname" 2>&1 | grep "\[STATS\]" | tail -1 > "$_adv_tmpdir/logs_${ci}" ) &
                 fi
             done
             local adv_all_stats=""
@@ -2319,7 +2324,7 @@ show_peers() {
             for ci in $(seq 1 $CONTAINER_COUNT); do
                 local cname=$(get_container_name $ci)
                 if echo "$docker_ps_cache" | grep -q "^${cname}$"; then
-                    ( docker logs --tail 30 "$cname" 2>&1 | grep "\[STATS\]" | tail -1 > "$_peer_tmpdir/logs_${ci}" ) &
+                    ( docker logs --tail 200 "$cname" 2>&1 | grep "\[STATS\]" | tail -1 > "$_peer_tmpdir/logs_${ci}" ) &
                 fi
             done
             wait
@@ -2466,6 +2471,13 @@ get_net_speed() {
     fi
 }
 
+# Global cache for container stats (persists between show_status calls)
+declare -A _STATS_CACHE_UP _STATS_CACHE_DOWN _STATS_CACHE_CONN _STATS_CACHE_CING
+
+# Global cache for docker stats (CPU/RAM) - refreshes every 2 cycles (20s)
+_DOCKER_STATS_CACHE=""
+_DOCKER_STATS_CYCLE=0
+
 show_status() {
     local mode="${1:-normal}" # 'live' mode adds line clearing
     local EL=""
@@ -2500,7 +2512,7 @@ show_status() {
         if echo "$docker_ps_cache" | grep -q "[[:space:]]${cname}$"; then
             _c_running[$i]=true
             running_count=$((running_count + 1))
-            ( docker logs --tail 30 "$cname" 2>&1 | grep "\[STATS\]" | tail -1 > "$_st_tmpdir/logs_${i}" ) &
+            ( docker logs --tail 200 "$cname" 2>&1 | grep "\[STATS\]" | tail -1 > "$_st_tmpdir/logs_${i}" ) &
         fi
     done
     wait
@@ -2524,10 +2536,25 @@ show_status() {
                 _c_cing[$i]="${c_connecting:-0}"
                 _c_up[$i]="${c_up_val}"
                 _c_down[$i]="${c_down_val}"
+                # Update global cache with fresh data
+                _STATS_CACHE_UP[$i]="${c_up_val}"
+                _STATS_CACHE_DOWN[$i]="${c_down_val}"
+                _STATS_CACHE_CONN[$i]="${c_connected:-0}"
+                _STATS_CACHE_CING[$i]="${c_connecting:-0}"
                 total_connecting=$((total_connecting + ${c_connecting:-0}))
                 total_connected=$((total_connected + ${c_connected:-0}))
                 if [ -z "$uptime" ]; then
                     uptime="${c_uptime_val}"
+                fi
+            else
+                # No stats in logs - use cached values if available
+                if [ -n "${_STATS_CACHE_UP[$i]}" ]; then
+                    _c_up[$i]="${_STATS_CACHE_UP[$i]}"
+                    _c_down[$i]="${_STATS_CACHE_DOWN[$i]}"
+                    _c_conn[$i]="${_STATS_CACHE_CONN[$i]:-0}"
+                    _c_cing[$i]="${_STATS_CACHE_CING[$i]:-0}"
+                    total_connecting=$((total_connecting + ${_c_cing[$i]:-0}))
+                    total_connected=$((total_connected + ${_c_conn[$i]:-0}))
                 fi
             fi
         fi
@@ -2588,15 +2615,24 @@ show_status() {
 
     if [ "$running_count" -gt 0 ]; then
 
-        # Run all 3 resource stat calls in parallel
+        # Run resource stat calls (docker stats cached every 2 cycles for CPU savings)
         local _rs_tmpdir=$(mktemp -d /tmp/.conduit_rs.XXXXXX)
-        # mktemp already created the directory
-        ( get_container_stats > "$_rs_tmpdir/cstats" ) &
+        _DOCKER_STATS_CYCLE=$(( (_DOCKER_STATS_CYCLE + 1) % 2 ))
+        if [ "$_DOCKER_STATS_CYCLE" -eq 1 ] || [ -z "$_DOCKER_STATS_CACHE" ]; then
+            # Fresh fetch cycle - get new docker stats
+            ( get_container_stats > "$_rs_tmpdir/cstats" ) &
+        fi
         ( get_system_stats > "$_rs_tmpdir/sys" ) &
         ( get_net_speed > "$_rs_tmpdir/net" ) &
         wait
 
-        local stats=$(cat "$_rs_tmpdir/cstats" 2>/dev/null)
+        local stats
+        if [ -f "$_rs_tmpdir/cstats" ]; then
+            stats=$(cat "$_rs_tmpdir/cstats" 2>/dev/null)
+            _DOCKER_STATS_CACHE="$stats"
+        else
+            stats="$_DOCKER_STATS_CACHE"
+        fi
         local sys_stats=$(cat "$_rs_tmpdir/sys" 2>/dev/null)
         local net_speed=$(cat "$_rs_tmpdir/net" 2>/dev/null)
         rm -rf "$_rs_tmpdir"
@@ -3495,7 +3531,7 @@ manage_containers() {
             if echo "$docker_ps_cache" | grep -q "^${cname}$"; then
                 running_names+=" $cname"
                 # Fetch logs in parallel background jobs
-                ( docker logs --tail 30 "$cname" 2>&1 | grep "\[STATS\]" | tail -1 > "$_mc_tmpdir/logs_${ci}" ) &
+                ( docker logs --tail 200 "$cname" 2>&1 | grep "\[STATS\]" | tail -1 > "$_mc_tmpdir/logs_${ci}" ) &
             fi
         done
         # Fetch stats in parallel with logs
@@ -3538,6 +3574,16 @@ manage_containers() {
                         c_down="${mc_down:-"-"}"
                         [ -z "$c_up" ] && c_up="-"
                         [ -z "$c_down" ] && c_down="-"
+                        # Update global cache
+                        _STATS_CACHE_UP[$ci]="${mc_up}"
+                        _STATS_CACHE_DOWN[$ci]="${mc_down}"
+                        _STATS_CACHE_CONN[$ci]="${conn:-0}"
+                        _STATS_CACHE_CING[$ci]="${cing:-0}"
+                    elif [ -n "${_STATS_CACHE_UP[$ci]}" ]; then
+                        # Use cached values as fallback
+                        c_clients="${_STATS_CACHE_CONN[$ci]:-0}/${_STATS_CACHE_CING[$ci]:-0}"
+                        c_up="${_STATS_CACHE_UP[$ci]:-"-"}"
+                        c_down="${_STATS_CACHE_DOWN[$ci]:-"-"}"
                     fi
                     local dstats_line=$(echo "$all_dstats" | grep "^${cname} " 2>/dev/null)
                     if [ -n "$dstats_line" ]; then
