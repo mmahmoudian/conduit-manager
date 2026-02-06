@@ -5298,11 +5298,15 @@ build_summary() {
 
 process_commands() {
     local offset_file="$INSTALL_DIR/traffic_stats/last_update_id"
-    local offset=0
-    [ -f "$offset_file" ] && offset=$(cat "$offset_file" 2>/dev/null)
-    offset=${offset:-0}
-    # Ensure numeric
-    [ "$offset" -eq "$offset" ] 2>/dev/null || offset=0
+    # Use in-memory offset as primary (survives file write failures)
+    # Only read from file on first call (when _CMD_OFFSET is unset)
+    if [ -z "${_CMD_OFFSET+x}" ]; then
+        _CMD_OFFSET=0
+        [ -f "$offset_file" ] && _CMD_OFFSET=$(cat "$offset_file" 2>/dev/null)
+        _CMD_OFFSET=${_CMD_OFFSET:-0}
+        [ "$_CMD_OFFSET" -eq "$_CMD_OFFSET" ] 2>/dev/null || _CMD_OFFSET=0
+    fi
+    local offset=$_CMD_OFFSET
 
     local response
     response=$(curl -s --max-time 10 --max-filesize 1048576 \
@@ -5465,7 +5469,11 @@ except Exception:
         esac
     done <<< "$parsed"
 
-    [ "$max_id" -gt "$offset" ] 2>/dev/null && echo "$max_id" > "$offset_file"
+    # Update in-memory offset first (prevents reprocessing even if file write fails)
+    if [ "$max_id" -gt "$offset" ] 2>/dev/null; then
+        _CMD_OFFSET=$max_id
+        echo "$max_id" > "$offset_file" 2>/dev/null
+    fi
 }
 
 build_report() {
