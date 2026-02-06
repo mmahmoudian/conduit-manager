@@ -1605,17 +1605,22 @@ PEAK_CONN_FILE="$PERSIST_DIR/peak_connections"
 LAST_CONN_RECORD=0
 CONN_RECORD_INTERVAL=300  # Record every 5 minutes
 
+# Get container name by index (matches main script naming)
+get_container_name() {
+    local idx=${1:-1}
+    if [ "$idx" -eq 1 ]; then
+        echo "conduit"
+    else
+        echo "conduit-${idx}"
+    fi
+}
+
 # Get earliest container start time (for reset detection)
 get_container_start() {
     local earliest=""
     local count=${CONTAINER_COUNT:-1}
     for i in $(seq 1 $count); do
-        local cname
-        if [ "$count" -eq 1 ]; then
-            cname="intgpsiphonclient"
-        else
-            cname="intgpsiphonclient${i}"
-        fi
+        local cname=$(get_container_name $i)
         local start=$(docker inspect --format='{{.State.StartedAt}}' "$cname" 2>/dev/null | cut -d'.' -f1)
         [ -z "$start" ] && continue
         if [ -z "$earliest" ] || [[ "$start" < "$earliest" ]]; then
@@ -1649,15 +1654,11 @@ count_connections() {
     local total_cing=0
     local count=${CONTAINER_COUNT:-1}
     for i in $(seq 1 $count); do
-        local cname
-        if [ "$count" -eq 1 ]; then
-            cname="intgpsiphonclient"
-        else
-            cname="intgpsiphonclient${i}"
-        fi
-        # Quick tail of recent logs
-        local stats=$(docker logs --tail 50 "$cname" 2>&1 | grep -o 'numClients":[0-9]*' | tail -1 | grep -o '[0-9]*')
-        local cing=$(docker logs --tail 50 "$cname" 2>&1 | grep -o 'connectingClients":[0-9]*' | tail -1 | grep -o '[0-9]*')
+        local cname=$(get_container_name $i)
+        # Single docker logs call, parse both fields from same line
+        local logdata=$(docker logs --tail 200 "$cname" 2>&1 | grep "\[STATS\]" | tail -1)
+        local stats=$(echo "$logdata" | awk '{for(j=1;j<=NF;j++) if($j=="Connected:") print $(j+1)}')
+        local cing=$(echo "$logdata" | awk '{for(j=1;j<=NF;j++) if($j=="Connecting:") print $(j+1)}')
         total_conn=$((total_conn + ${stats:-0}))
         total_cing=$((total_cing + ${cing:-0}))
     done
@@ -3215,8 +3216,11 @@ show_status() {
 
             echo -e "${EL}"
             echo -e "${CYAN}═══ Traffic (current session) ═══${NC}${EL}"
-            # Record connection history (every 5 min)
-            record_connection_history "$connected" "$connecting"
+            # Record connection history (every 5 min) — only if tracker is not running
+            # to avoid double entries and race conditions on the history file
+            if ! systemctl is-active conduit-tracker.service &>/dev/null 2>&1; then
+                record_connection_history "$connected" "$connecting"
+            fi
             # Get connection history snapshots
             local snap_6h=$(get_connection_snapshot 6)
             local snap_12h=$(get_connection_snapshot 12)
@@ -7197,6 +7201,7 @@ case "${1:-menu}" in
     uninstall) uninstall_all ;;
     version|-v|--version) show_version ;;
     help|-h|--help) show_help ;;
+    regen-tracker) setup_tracker_service 2>/dev/null ;;
     menu|*)   show_menu ;;
 esac
 MANAGEMENT
@@ -7385,6 +7390,8 @@ main() {
                 echo -e "${RED}Failed to update management script${NC}"
                 exit 1
             fi
+            # Regenerate tracker via the newly installed management script
+            "$INSTALL_DIR/conduit" regen-tracker 2>/dev/null || true
             # Rewrite conduit.service to correct format (fixes stale/old service files)
             if command -v systemctl &>/dev/null && [ -f /etc/systemd/system/conduit.service ]; then
                 local need_rewrite=false
