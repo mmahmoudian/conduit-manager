@@ -7210,6 +7210,7 @@ case "${1:-menu}" in
     version|-v|--version) show_version ;;
     help|-h|--help) show_help ;;
     regen-tracker) setup_tracker_service 2>/dev/null ;;
+    regen-telegram) [ "${TELEGRAM_ENABLED:-false}" = "true" ] && setup_telegram_service 2>/dev/null ;;
     menu|*)   show_menu ;;
 esac
 MANAGEMENT
@@ -7398,8 +7399,9 @@ main() {
                 echo -e "${RED}Failed to update management script${NC}"
                 exit 1
             fi
-            # Regenerate tracker via the newly installed management script
+            # Regenerate tracker and telegram via the newly installed management script
             "$INSTALL_DIR/conduit" regen-tracker 2>/dev/null || true
+            "$INSTALL_DIR/conduit" regen-telegram 2>/dev/null || true
             # Rewrite conduit.service to correct format (fixes stale/old service files)
             if command -v systemctl &>/dev/null && [ -f /etc/systemd/system/conduit.service ]; then
                 local need_rewrite=false
