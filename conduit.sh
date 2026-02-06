@@ -1581,6 +1581,11 @@ set -u
 INSTALL_DIR="/opt/conduit"
 PERSIST_DIR="/opt/conduit/traffic_stats"
 mkdir -p "$PERSIST_DIR"
+
+# Load settings (CONTAINER_COUNT, MAX_CLIENTS, etc.)
+[ -f "$INSTALL_DIR/settings.conf" ] && source "$INSTALL_DIR/settings.conf"
+CONTAINER_COUNT=${CONTAINER_COUNT:-1}
+
 STATS_FILE="$PERSIST_DIR/cumulative_data"
 IPS_FILE="$PERSIST_DIR/cumulative_ips"
 SNAPSHOT_FILE="$PERSIST_DIR/tracker_snapshot"
