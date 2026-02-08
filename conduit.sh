@@ -4922,15 +4922,28 @@ telegram_build_report() {
     report+="👥 Clients: ${total_peers} connected, ${total_connecting} connecting"
     report+=$'\n'
 
-    # CPU / RAM (normalize CPU by core count like dashboard)
+    # App CPU / RAM (normalize CPU by core count like dashboard)
     local stats=$(get_container_stats)
     local raw_cpu=$(echo "$stats" | awk '{print $1}')
     local cores=$(get_cpu_cores)
-    local cpu=$(awk "BEGIN {printf \"%.1f%%\", ${raw_cpu%\%} / $cores}" 2>/dev/null || echo "$raw_cpu")
-    local ram=$(echo "$stats" | awk '{print $2, $3, $4}')
-    cpu=$(escape_telegram_markdown "$cpu")
-    ram=$(escape_telegram_markdown "$ram")
-    report+="🖥 CPU: ${cpu} | RAM: ${ram}"
+    local app_cpu=$(awk "BEGIN {printf \"%.1f%%\", ${raw_cpu%\%} / $cores}" 2>/dev/null || echo "$raw_cpu")
+    local app_ram=$(echo "$stats" | awk '{print $2, $3, $4}')
+    app_cpu=$(escape_telegram_markdown "$app_cpu")
+    app_ram=$(escape_telegram_markdown "$app_ram")
+    report+="🖥 App CPU: ${app_cpu} | RAM: ${app_ram}"
+    report+=$'\n'
+
+    # System CPU + Temp + RAM
+    local sys_stats=$(get_system_stats)
+    local sys_cpu=$(echo "$sys_stats" | awk '{print $1}')
+    local sys_temp=$(echo "$sys_stats" | awk '{print $2}')
+    local sys_ram_used=$(echo "$sys_stats" | awk '{print $3}')
+    local sys_ram_total=$(echo "$sys_stats" | awk '{print $4}')
+    local sys_line="🔧 System CPU: ${sys_cpu}"
+    [ "$sys_temp" != "-" ] && sys_line+=" (${sys_temp})"
+    sys_line+=" | RAM: ${sys_ram_used} / ${sys_ram_total}"
+    sys_line=$(escape_telegram_markdown "$sys_line")
+    report+="${sys_line}"
     report+=$'\n'
 
     # Data usage
@@ -5082,6 +5095,32 @@ get_cpu_cores() {
     fi
     [ "$cores" -lt 1 ] 2>/dev/null && cores=1
     echo "$cores"
+}
+
+get_container_stats() {
+    local names=""
+    for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+        names+=" $(get_container_name $i)"
+    done
+    local all_stats=$(timeout 10 docker stats --no-stream --format "{{.CPUPerc}} {{.MemUsage}}" $names 2>/dev/null)
+    if [ -z "$all_stats" ]; then
+        echo "0% 0MiB"
+    elif [ "${CONTAINER_COUNT:-1}" -le 1 ]; then
+        echo "$all_stats"
+    else
+        echo "$all_stats" | awk '{
+            cpu=$1; gsub(/%/,"",cpu); total_cpu+=cpu+0
+            mem=$2; gsub(/[^0-9.]/,"",mem); mem+=0
+            if($2~/GiB/) mem*=1024; else if($2~/KiB/) mem/=1024
+            total_mem+=mem
+            if(mem_limit=="") mem_limit=$4
+            found=1
+        } END {
+            if(!found){print "0% 0MiB"; exit}
+            if(total_mem>=1024) ms=sprintf("%.2fGiB",total_mem/1024); else ms=sprintf("%.1fMiB",total_mem)
+            printf "%.2f%% %s / %s\n", total_cpu, ms, mem_limit
+        }'
+    fi
 }
 
 track_uptime() {
@@ -5563,15 +5602,66 @@ build_report() {
         fi
     fi
 
-    # CPU / RAM
-    local stats=$(timeout 10 docker stats --no-stream --format "{{.CPUPerc}} {{.MemUsage}}" $(docker ps --format '{{.Names}}' 2>/dev/null | grep "^conduit") 2>/dev/null | head -1)
+    # App CPU / RAM (aggregate all containers)
+    local stats=$(get_container_stats)
     local raw_cpu=$(echo "$stats" | awk '{print $1}')
     local cores=$(get_cpu_cores)
-    local cpu=$(awk "BEGIN {printf \"%.1f%%\", ${raw_cpu%\%} / $cores}" 2>/dev/null || echo "$raw_cpu")
-    local ram=$(echo "$stats" | awk '{print $2, $3, $4}')
-    cpu=$(escape_md "$cpu")
-    ram=$(escape_md "$ram")
-    report+="🖥 CPU: ${cpu} | RAM: ${ram}"
+    local app_cpu=$(awk "BEGIN {printf \"%.1f%%\", ${raw_cpu%\%} / $cores}" 2>/dev/null || echo "$raw_cpu")
+    local app_ram=$(echo "$stats" | awk '{print $2, $3, $4}')
+    app_cpu=$(escape_md "$app_cpu")
+    app_ram=$(escape_md "$app_ram")
+    report+="🖥 App CPU: ${app_cpu} | RAM: ${app_ram}"
+    report+=$'\n'
+
+    # System CPU + Temp
+    local sys_cpu="N/A"
+    if [ -f /proc/stat ]; then
+        read -r _c user nice system idle iowait irq softirq steal guest < /proc/stat
+        local total_curr=$((user + nice + system + idle + iowait + irq + softirq + steal))
+        local work_curr=$((user + nice + system + irq + softirq + steal))
+        local cpu_tmp="/tmp/conduit_cpu_state"
+        if [ -f "$cpu_tmp" ]; then
+            read -r total_prev work_prev < "$cpu_tmp"
+            local total_delta=$((total_curr - total_prev))
+            local work_delta=$((work_curr - work_prev))
+            [ "$total_delta" -gt 0 ] && sys_cpu=$(awk -v w="$work_delta" -v t="$total_delta" 'BEGIN{printf "%.1f%%", w*100/t}')
+        fi
+        echo "$total_curr $work_curr" > "$cpu_tmp"
+    fi
+    local cpu_temp=""
+    local temp_sum=0 temp_count=0
+    for hwmon_dir in /sys/class/hwmon/hwmon*; do
+        [ -d "$hwmon_dir" ] || continue
+        local hwmon_name=$(cat "$hwmon_dir/name" 2>/dev/null)
+        case "$hwmon_name" in
+            coretemp|k10temp|cpu_thermal|soc_thermal|cpu-thermal|thermal-fan-est)
+                for tf in "$hwmon_dir"/temp*_input; do
+                    [ -f "$tf" ] || continue
+                    local tr=$(cat "$tf" 2>/dev/null)
+                    [ -n "$tr" ] && [ "$tr" -gt 0 ] 2>/dev/null && temp_sum=$((temp_sum + tr)) && temp_count=$((temp_count + 1))
+                done ;;
+        esac
+    done
+    if [ "$temp_count" -gt 0 ]; then
+        cpu_temp="$((temp_sum / temp_count / 1000))°C"
+    elif [ -f /sys/class/thermal/thermal_zone0/temp ]; then
+        local tr=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
+        [ -n "$tr" ] && [ "$tr" -gt 0 ] 2>/dev/null && cpu_temp="$((tr / 1000))°C"
+    fi
+    local sys_line="🔧 System CPU: ${sys_cpu}"
+    [ -n "$cpu_temp" ] && sys_line+=" (${cpu_temp})"
+    # System RAM
+    if command -v free &>/dev/null; then
+        local sys_ram=$(free -m 2>/dev/null | awk '/^Mem:/{
+            u=$3; t=$2
+            if(t>=1024) ts=sprintf("%.1fGiB",t/1024); else ts=sprintf("%dMiB",t)
+            if(u>=1024) us=sprintf("%.1fGiB",u/1024); else us=sprintf("%dMiB",u)
+            printf "%s / %s", us, ts
+        }')
+        sys_line+=" | RAM: ${sys_ram}"
+    fi
+    sys_line=$(escape_md "$sys_line")
+    report+="${sys_line}"
     report+=$'\n'
 
     # Data usage
