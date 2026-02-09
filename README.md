@@ -10,7 +10,7 @@
                       M A N A G E R
 ```
 
-![Version](https://img.shields.io/badge/version-1.2.1-blue)
+![Version](https://img.shields.io/badge/version-1.3-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Linux-orange)
 ![Docker](https://img.shields.io/badge/Docker-Required-2496ED?logo=docker&logoColor=white)
@@ -41,29 +41,19 @@ wget https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.s
 sudo bash conduit.sh
 ```
 
-## What's New in v1.2.1
+## What's New in v1.3
 
-- **Peak & Average Tracking** — Dashboard shows peak and average connected clients since container start
-- **Connection History** — See client counts from 6h, 12h, and 24h ago on the dashboard
-- **24/7 Background Recording** — Tracker records connection stats even when dashboard is closed
-- **Temporal Sampling** — Tracker captures 15s, sleeps 15s, multiplies by 2x for ~40-50% CPU reduction
-- **CPU Temperature Display** — System CPU load now shows temperature when available
-- **Unlimited Containers** — Removed 5-container limit, scale based on your hardware
-- **Tracker Toggle** — Option to disable tracker for additional CPU savings
-- **Smart Data Reset** — Peak, average, and history reset only when ALL containers restart
-- **New Info Page** — Added "Peak, Average & Client History" guide explaining all stats
-
-## What's New in v1.2
-
-- **Per-Container Resource Limits** — Set CPU and memory limits per container via Settings menu with smart defaults
-- **Telegram Bot Integration** — Periodic status reports, alerts, and commands (`/status`, `/peers`, `/uptime`, `/containers`, `/restart_N`, `/stop_N`, `/start_N`)
-- **Systemd Notification Service** — Telegram bot runs as a systemd service, survives reboots and TUI exits
-- **Performance Overhaul** — Parallelized docker commands across all TUI screens, reduced refresh from ~10s to ~2-3s
-- **Compact Number Display** — Large counts show as 16.5K, 1.2M
-- **Active Clients Count** — Connected and connecting peers in dashboard and Telegram reports
-- **Atomic Config Writes** — Settings file writes are now crash-safe
-- **Secure Temp Directories** — All temp dirs use `mktemp` for secure random names
-- **20+ Bug Fixes** — TUI stability, health check edge cases, Telegram escaping, peer count consistency, and more
+- **Snowflake Proxy Integration** — Built-in Tor Snowflake proxy with dual-instance support, resource configuration, and traffic monitoring
+- **Multi-Server Dashboard** — Manage up to 9 remote servers from one TUI with live status, bulk actions, and per-server controls
+- **Remote Server Management** — Add, edit, and remove servers with SSH key or password authentication
+- **Encrypted Credential Storage** — AES-256-CBC encrypted password storage with automatic sshpass management
+- **Non-Root SSH Support** — Automatic sudo prefix for non-root remote users with passwordless sudo verification
+- **Telegram Bot Enhancements** — Inline keyboards, QR code delivery, system CPU/temp/RAM in reports, new commands (`/restart_all`, `/start_all`, `/stop_all`, `/settings`, `/update`, `/health`, `/logs_N`, `/qr`)
+- **Dashboard Improvements** — Cleaner local section, upload/download columns, combined CPU(temp) display, fixed border alignment
+- **Info & Help Pages** — New Snowflake Proxy explainer and Safety & Legal information pages
+- **GeoIP Management** — Manual GeoIP database updates via CLI
+- **New CLI Commands** — `conduit dashboard`, `conduit add-server`, `conduit remove-server`, `conduit servers`, `conduit snowflake`, `conduit update-geoip`
+- **System Metrics in Reports** — CPU usage, temperature, and RAM in status JSON and Telegram notifications
 
 ## Features
 
@@ -71,18 +61,22 @@ sudo bash conduit.sh
 - **Scalable Containers** — Run unlimited containers based on your server's capacity
 - **Multi-Distro Support** — Works on Ubuntu, Debian, CentOS, Fedora, Arch, Alpine, openSUSE
 - **Auto-Start on Boot** — Supports systemd, OpenRC, and SysVinit
+- **Snowflake Proxy** — Built-in Tor Snowflake proxy with dual-instance support and resource management
+- **Multi-Server Dashboard** — Manage up to 9 remote servers from one TUI with live refresh and bulk actions
+- **Remote Server Management** — SSH key and encrypted password authentication with ControlMaster persistent connections
 - **Live Dashboard** — Real-time stats with peak, average, CPU/RAM, temperature, and per-country breakdown
 - **Connection History** — Track client counts over time with 6h, 12h, 24h snapshots
 - **Advanced Stats** — Top countries by connected peers, download, upload, and unique IPs with bar charts
 - **Live Peer Traffic** — Real-time traffic table by country with speed, total bytes, and IP/client counts
 - **Background Tracker** — 24/7 traffic and connection monitoring via systemd service with GeoIP resolution
-- **Telegram Bot** — On-demand `/status`, `/peers`, `/uptime`, `/containers` and remote container management via Telegram
+- **Telegram Bot** — On-demand `/status`, `/peers`, `/uptime`, `/containers` and remote container management via Telegram with inline keyboards and QR delivery
 - **Per-Container Settings** — Configure max-clients, bandwidth, CPU, and memory per container
 - **Resource Limits** — Set CPU and memory limits with smart defaults based on system specs
 - **Easy Management** — Powerful CLI commands or interactive menu
 - **Backup & Restore** — Backup and restore your node identity keys
 - **Health Checks** — Comprehensive diagnostics for troubleshooting
-- **Info & Help** — Built-in multi-page guide explaining traffic, stats, and how everything works
+- **Info & Help** — Built-in guides covering traffic, stats, Snowflake proxy, and safety & legal information
+- **Safety & Legal Info** — Built-in pages explaining the legal protections and safety of running a node
 - **Complete Uninstall** — Clean removal of all components including Telegram service
 
 ## Supported Distributions
@@ -280,28 +274,19 @@ wget https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.s
 sudo bash conduit.sh
 ```
 
-## تازه‌های نسخه 1.2.1
+## تازه‌های نسخه 1.3
 
-- **ردیابی پیک و میانگین** — نمایش بیشترین و میانگین کلاینت‌های متصل از زمان شروع کانتینر
-- **تاریخچه اتصال** — مشاهده تعداد کلاینت‌ها در ۶، ۱۲ و ۲۴ ساعت گذشته
-- **ضبط ۲۴/۷ پس‌زمینه** — ردیاب آمار اتصال را حتی وقتی داشبورد بسته است ثبت می‌کند
-- **نمونه‌برداری زمانی** — ردیاب ۱۵ ثانیه ضبط، ۱۵ ثانیه استراحت با ضریب ۲ برای ~۴۰-۵۰٪ کاهش CPU
-- **نمایش دمای CPU** — نمایش دما در کنار مصرف CPU سیستم
-- **کانتینر نامحدود** — حذف محدودیت ۵ کانتینر، مقیاس‌بندی بر اساس سخت‌افزار
-- **غیرفعال‌سازی ردیاب** — گزینه خاموش کردن ردیاب برای صرفه‌جویی بیشتر CPU
-- **ریست هوشمند داده** — پیک، میانگین و تاریخچه فقط وقتی همه کانتینرها ریستارت شوند ریست می‌شوند
-- **صفحه راهنمای جدید** — توضیح پیک، میانگین و تاریخچه کلاینت‌ها
-
-## تازه‌های نسخه 1.2
-
-- **محدودیت منابع هر کانتینر** — تنظیم محدودیت CPU و حافظه برای هر کانتینر با پیش‌فرض‌های هوشمند
-- **ربات تلگرام** — گزارش‌های دوره‌ای، هشدارها و دستورات (`/status`، `/peers`، `/uptime`، `/containers`، `/restart_N`، `/stop_N`، `/start_N`)
-- **سرویس اعلان سیستمی** — ربات تلگرام به عنوان سرویس systemd اجرا می‌شود و پس از ریستارت سرور فعال می‌ماند
-- **بهبود عملکرد** — دستورات داکر به صورت موازی اجرا شده، زمان رفرش از ~۱۰ ثانیه به ~۲-۳ ثانیه کاهش یافته
-- **نمایش فشرده اعداد** — اعداد بزرگ به صورت 16.5K و 1.2M نمایش داده می‌شوند
-- **شمارش کلاینت‌های فعال** — تعداد متصل و در حال اتصال در داشبورد و گزارش تلگرام
-- **ذخیره امن تنظیمات** — نوشتن فایل تنظیمات به صورت اتمیک برای جلوگیری از خرابی
-- **۲۰+ رفع باگ** — پایداری رابط کاربری، بررسی سلامت، فرمت تلگرام، هماهنگی تعداد کاربران و موارد دیگر
+- **پروکسی اسنوفلیک** — پروکسی Snowflake تور با پشتیبانی دو نمونه، پیکربندی منابع و مانیتورینگ ترافیک
+- **داشبورد چند سرور** — مدیریت تا ۹ سرور ریموت از یک صفحه با وضعیت زنده، عملیات گروهی و کنترل هر سرور
+- **مدیریت سرور ریموت** — اضافه، ویرایش و حذف سرور با احراز هویت کلید SSH یا رمز عبور
+- **ذخیره رمزنگاری‌شده اعتبارنامه** — رمزنگاری AES-256-CBC برای رمز عبور با مدیریت خودکار sshpass
+- **پشتیبانی SSH غیر root** — افزودن خودکار sudo برای کاربران غیر root با تأیید sudo بدون رمز
+- **بهبود ربات تلگرام** — دکمه‌های اینلاین، ارسال QR کد، CPU/دما/RAM سیستم در گزارش‌ها، دستورات جدید (`/restart_all`، `/start_all`، `/stop_all`، `/settings`، `/update`، `/health`، `/logs_N`، `/qr`)
+- **بهبود داشبورد** — بخش محلی تمیزتر، ستون‌های آپلود/دانلود، نمایش ترکیبی CPU(دما)، اصلاح حاشیه‌ها
+- **صفحات اطلاعات جدید** — صفحه توضیح پروکسی اسنوفلیک و اطلاعات ایمنی و حقوقی
+- **مدیریت GeoIP** — به‌روزرسانی دستی پایگاه داده GeoIP از CLI
+- **دستورات جدید CLI** — `conduit dashboard`، `conduit add-server`، `conduit remove-server`، `conduit servers`، `conduit snowflake`، `conduit update-geoip`
+- **معیارهای سیستم در گزارش‌ها** — مصرف CPU، دما و RAM در JSON وضعیت و اعلان‌های تلگرام
 
 ## ویژگی‌ها
 
@@ -309,18 +294,22 @@ sudo bash conduit.sh
 - **مقیاس‌پذیری نامحدود** — اجرای کانتینرهای نامحدود بر اساس ظرفیت سرور
 - **پشتیبانی از توزیع‌های مختلف** — اوبونتو، دبیان، سنت‌اواس، فدورا، آرچ، آلپاین، اوپن‌سوزه
 - **راه‌اندازی خودکار** — پس از ریستارت سرور، سرویس به صورت خودکار اجرا می‌شود
+- **پروکسی اسنوفلیک** — پروکسی Snowflake تور با پشتیبانی دو نمونه و مدیریت منابع
+- **داشبورد چند سرور** — مدیریت تا ۹ سرور ریموت با رفرش زنده و عملیات گروهی
+- **مدیریت سرور ریموت** — احراز هویت کلید SSH و رمز عبور رمزنگاری‌شده با اتصال پایدار ControlMaster
 - **داشبورد زنده** — نمایش لحظه‌ای پیک، میانگین، CPU، RAM، دما و تفکیک کشوری
 - **تاریخچه اتصال** — ردیابی تعداد کلاینت‌ها با اسنپ‌شات ۶، ۱۲ و ۲۴ ساعته
 - **آمار پیشرفته** — نمودار میله‌ای برترین کشورها بر اساس اتصال، دانلود، آپلود و IP
 - **مانیتورینگ ترافیک** — جدول لحظه‌ای ترافیک بر اساس کشور با سرعت و تعداد کلاینت
 - **ردیاب پس‌زمینه** — سرویس ردیابی ۲۴/۷ ترافیک و اتصالات با تشخیص جغرافیایی
-- **ربات تلگرام** — دستورات `/status`، `/peers`، `/uptime`، `/containers` و مدیریت کانتینر از راه دور (اختیاری)
+- **ربات تلگرام** — دستورات `/status`، `/peers`، `/uptime`، `/containers` و مدیریت کانتینر از راه دور با دکمه‌های اینلاین و ارسال QR کد
 - **تنظیمات هر کانتینر** — پیکربندی حداکثر کاربران، پهنای باند، CPU و حافظه برای هر کانتینر
 - **محدودیت منابع** — تنظیم محدودیت CPU و حافظه با پیش‌فرض‌های هوشمند
 - **مدیریت آسان** — دستورات قدرتمند CLI یا منوی تعاملی
 - **پشتیبان‌گیری و بازیابی** — پشتیبان‌گیری و بازیابی کلیدهای هویت نود
 - **بررسی سلامت** — تشخیص جامع برای عیب‌یابی
-- **راهنما و اطلاعات** — راهنمای چندصفحه‌ای توضیح ترافیک، آمار و نحوه کارکرد
+- **راهنما و اطلاعات** — راهنمای چندصفحه‌ای شامل ترافیک، آمار، پروکسی اسنوفلیک و اطلاعات ایمنی و حقوقی
+- **اطلاعات ایمنی و حقوقی** — صفحات توضیح حفاظت قانونی و ایمنی اجرای نود
 - **حذف کامل** — پاکسازی تمام فایل‌ها و تنظیمات شامل سرویس تلگرام
 
 ## پشتیبانی از macOS

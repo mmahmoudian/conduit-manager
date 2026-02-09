@@ -1,12 +1,12 @@
 #!/bin/bash
 #
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║     🚀 PSIPHON CONDUIT MANAGER v1.2.1                             ║
+# ║     🚀 PSIPHON CONDUIT MANAGER v1.3                               ║
 # ║                                                                   ║
 # ║  One-click setup for Psiphon Conduit                              ║
 # ║                                                                   ║
 # ║  • Installs Docker (if needed)                                    ║
-# ║  • Runs Conduit in Docker with live stats                         
+# ║  • Runs Conduit in Docker with live stats                         ║ 
 # ║  • Auto-start on boot via systemd/OpenRC/SysVinit                 ║
 # ║  • Easy management via CLI or interactive menu                    ║
 # ║                                                                   ║
@@ -31,7 +31,7 @@ if [ -z "$BASH_VERSION" ]; then
     exit 1
 fi
 
-VERSION="1.2.1"
+VERSION="1.3"
 CONDUIT_IMAGE="ghcr.io/ssmirr/conduit/conduit:latest"
 INSTALL_DIR="${INSTALL_DIR:-/opt/conduit}"
 BACKUP_DIR="$INSTALL_DIR/backups"
@@ -55,7 +55,7 @@ NC='\033[0m'
 print_header() {
     echo -e "${CYAN}"
     echo "╔═══════════════════════════════════════════════════════════════════╗"
-    echo "║                🚀 PSIPHON CONDUIT MANAGER v${VERSION}                  ║"
+    echo "║                🚀 PSIPHON CONDUIT MANAGER v${VERSION}                    ║"
     echo "╠═══════════════════════════════════════════════════════════════════╣"
     echo "║  Help users access the open internet during shutdowns             ║"
     echo "╚═══════════════════════════════════════════════════════════════════╝"
@@ -614,7 +614,7 @@ check_and_offer_backup_restore() {
             # Try bind-mount, fall back to docker cp (Snap Docker compatibility)
             local restore_ok=false
             if docker run --rm -v conduit-data:/home/conduit/data -v "$BACKUP_DIR":/backup alpine \
-                sh -c "cp /backup/$backup_filename /home/conduit/data/conduit_key.json && chown -R 1000:1000 /home/conduit/data" 2>/dev/null; then
+                sh -c 'cp /backup/'"$backup_filename"' /home/conduit/data/conduit_key.json && chown -R 1000:1000 /home/conduit/data' 2>/dev/null; then
                 restore_ok=true
             else
                 log_info "Bind-mount failed (Snap Docker?), trying docker cp..."
@@ -658,7 +658,7 @@ run_conduit() {
         exit 1
     fi
 
-    for i in $(seq 1 $count); do
+    for i in $(seq 1 "$count"); do
         local cname="conduit"
         local vname="conduit-data"
         [ "$i" -gt 1 ] && cname="conduit-${i}" && vname="conduit-data-${i}"
@@ -676,7 +676,7 @@ run_conduit() {
         [ -n "$cpus" ] && resource_args+="--cpus $cpus "
         [ -n "$mem" ] && resource_args+="--memory $mem "
         # shellcheck disable=SC2086
-        docker run -d \
+        if docker run -d \
             --name "$cname" \
             --restart unless-stopped \
             --log-opt max-size=15m \
@@ -685,9 +685,7 @@ run_conduit() {
             --network host \
             $resource_args \
             "$CONDUIT_IMAGE" \
-            start --max-clients "$MAX_CLIENTS" --bandwidth "$BANDWIDTH" --stats-file
-
-        if [ $? -eq 0 ]; then
+            start --max-clients "$MAX_CLIENTS" --bandwidth "$BANDWIDTH" --stats-file; then
             log_success "$cname started"
         else
             log_error "Failed to start $cname"
@@ -713,8 +711,12 @@ save_settings_install() {
     # Preserve existing Telegram settings on reinstall
     local _tg_token="" _tg_chat="" _tg_interval="6" _tg_enabled="false"
     local _tg_alerts="true" _tg_daily="true" _tg_weekly="true" _tg_label="" _tg_start_hour="0"
+    local _sf_enabled="false" _sf_count="1" _sf_cpus="" _sf_memory=""
+    local _dc_gb="0" _dc_up="0" _dc_down="0" _dc_iface=""
+    local _dc_base_rx="0" _dc_base_tx="0" _dc_prior="0" _dc_prior_rx="0" _dc_prior_tx="0"
+    local _dk_cpus="" _dk_memory="" _tracker="true"
     if [ -f "$INSTALL_DIR/settings.conf" ]; then
-        source "$INSTALL_DIR/settings.conf" 2>/dev/null
+        source "$INSTALL_DIR/settings.conf" 2>/dev/null || true
         _tg_token="${TELEGRAM_BOT_TOKEN:-}"
         _tg_chat="${TELEGRAM_CHAT_ID:-}"
         _tg_interval="${TELEGRAM_INTERVAL:-6}"
@@ -724,17 +726,44 @@ save_settings_install() {
         _tg_weekly="${TELEGRAM_WEEKLY_SUMMARY:-true}"
         _tg_label="${TELEGRAM_SERVER_LABEL:-}"
         _tg_start_hour="${TELEGRAM_START_HOUR:-0}"
+        _sf_enabled="${SNOWFLAKE_ENABLED:-false}"
+        _sf_count="${SNOWFLAKE_COUNT:-1}"
+        _sf_cpus="${SNOWFLAKE_CPUS:-}"
+        _sf_memory="${SNOWFLAKE_MEMORY:-}"
+        _dc_gb="${DATA_CAP_GB:-0}"
+        _dc_up="${DATA_CAP_UP_GB:-0}"
+        _dc_down="${DATA_CAP_DOWN_GB:-0}"
+        _dc_iface="${DATA_CAP_IFACE:-}"
+        _dc_base_rx="${DATA_CAP_BASELINE_RX:-0}"
+        _dc_base_tx="${DATA_CAP_BASELINE_TX:-0}"
+        _dc_prior="${DATA_CAP_PRIOR_USAGE:-0}"
+        _dc_prior_rx="${DATA_CAP_PRIOR_RX:-0}"
+        _dc_prior_tx="${DATA_CAP_PRIOR_TX:-0}"
+        _dk_cpus="${DOCKER_CPUS:-}"
+        _dk_memory="${DOCKER_MEMORY:-}"
+        _tracker="${TRACKER_ENABLED:-true}"
     fi
     local _tmp="$INSTALL_DIR/settings.conf.tmp.$$"
     cat > "$_tmp" << EOF
 MAX_CLIENTS=$MAX_CLIENTS
 BANDWIDTH=$BANDWIDTH
 CONTAINER_COUNT=${CONTAINER_COUNT:-1}
-DATA_CAP_GB=0
-DATA_CAP_IFACE=
-DATA_CAP_BASELINE_RX=0
-DATA_CAP_BASELINE_TX=0
-DATA_CAP_PRIOR_USAGE=0
+DATA_CAP_GB=$_dc_gb
+DATA_CAP_UP_GB=$_dc_up
+DATA_CAP_DOWN_GB=$_dc_down
+DATA_CAP_IFACE=$_dc_iface
+DATA_CAP_BASELINE_RX=$_dc_base_rx
+DATA_CAP_BASELINE_TX=$_dc_base_tx
+DATA_CAP_PRIOR_USAGE=$_dc_prior
+DATA_CAP_PRIOR_RX=$_dc_prior_rx
+DATA_CAP_PRIOR_TX=$_dc_prior_tx
+DOCKER_CPUS=$_dk_cpus
+DOCKER_MEMORY=$_dk_memory
+TRACKER_ENABLED=$_tracker
+SNOWFLAKE_ENABLED=$_sf_enabled
+SNOWFLAKE_COUNT=$_sf_count
+SNOWFLAKE_CPUS=$_sf_cpus
+SNOWFLAKE_MEMORY=$_sf_memory
 TELEGRAM_BOT_TOKEN="$_tg_token"
 TELEGRAM_CHAT_ID="$_tg_chat"
 TELEGRAM_INTERVAL=$_tg_interval
@@ -742,7 +771,7 @@ TELEGRAM_ENABLED=$_tg_enabled
 TELEGRAM_ALERTS_ENABLED=$_tg_alerts
 TELEGRAM_DAILY_SUMMARY=$_tg_daily
 TELEGRAM_WEEKLY_SUMMARY=$_tg_weekly
-TELEGRAM_SERVER_LABEL="$_tg_label"
+TELEGRAM_SERVER_LABEL="${_tg_label//\"/}"
 TELEGRAM_START_HOUR=$_tg_start_hour
 EOF
     chmod 600 "$_tmp" 2>/dev/null || true
@@ -769,8 +798,8 @@ Wants=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/bin/conduit start
-ExecStop=/usr/local/bin/conduit stop
+ExecStart=/usr/local/bin/conduit start --auto
+ExecStop=/usr/local/bin/conduit stop --auto
 
 [Install]
 WantedBy=multi-user.target
@@ -780,7 +809,7 @@ EOF
         systemctl enable conduit.service 2>/dev/null || true
         systemctl start conduit.service 2>/dev/null || true
         log_success "Systemd service created, enabled, and started"
-        
+
     elif command -v rc-update &>/dev/null; then
         # OpenRC (Alpine, Gentoo, etc.)
         cat > /etc/init.d/conduit << 'EOF'
@@ -794,19 +823,19 @@ depend() {
 }
 start() {
     ebegin "Starting Conduit"
-    /usr/local/bin/conduit start
+    /usr/local/bin/conduit start --auto
     eend $?
 }
 stop() {
     ebegin "Stopping Conduit"
-    /usr/local/bin/conduit stop
+    /usr/local/bin/conduit stop --auto
     eend $?
 }
 EOF
         chmod +x /etc/init.d/conduit
         rc-update add conduit default 2>/dev/null || true
         log_success "OpenRC service created and enabled"
-        
+
     elif [ -d /etc/init.d ]; then
         # SysVinit fallback
         cat > /etc/init.d/conduit << 'EOF'
@@ -822,10 +851,10 @@ EOF
 
 case "$1" in
     start)
-        /usr/local/bin/conduit start
+        /usr/local/bin/conduit start --auto
         ;;
     stop)
-        /usr/local/bin/conduit stop
+        /usr/local/bin/conduit stop --auto
         ;;
     restart)
         /usr/local/bin/conduit restart
@@ -858,7 +887,7 @@ EOF
 #═══════════════════════════════════════════════════════════════════════
 
 create_management_script() {
-    # Generate the management script (write to temp file first to avoid "Text file busy")
+    # Write to temp file first to avoid "Text file busy"
     local tmp_script="$INSTALL_DIR/conduit.tmp.$$"
     cat > "$tmp_script" << 'MANAGEMENT'
 #!/bin/bash
@@ -867,7 +896,7 @@ create_management_script() {
 # Reference: https://github.com/ssmirr/conduit/releases/latest
 #
 
-VERSION="1.2.1"
+VERSION="1.3"
 INSTALL_DIR="REPLACE_ME_INSTALL_DIR"
 BACKUP_DIR="$INSTALL_DIR/backups"
 CONDUIT_IMAGE="ghcr.io/ssmirr/conduit/conduit:latest"
@@ -888,10 +917,19 @@ MAX_CLIENTS=${MAX_CLIENTS:-200}
 BANDWIDTH=${BANDWIDTH:-5}
 CONTAINER_COUNT=${CONTAINER_COUNT:-1}
 DATA_CAP_GB=${DATA_CAP_GB:-0}
+DATA_CAP_UP_GB=${DATA_CAP_UP_GB:-0}
+DATA_CAP_DOWN_GB=${DATA_CAP_DOWN_GB:-0}
 DATA_CAP_IFACE=${DATA_CAP_IFACE:-}
 DATA_CAP_BASELINE_RX=${DATA_CAP_BASELINE_RX:-0}
 DATA_CAP_BASELINE_TX=${DATA_CAP_BASELINE_TX:-0}
 DATA_CAP_PRIOR_USAGE=${DATA_CAP_PRIOR_USAGE:-0}
+DATA_CAP_PRIOR_RX=${DATA_CAP_PRIOR_RX:-0}
+DATA_CAP_PRIOR_TX=${DATA_CAP_PRIOR_TX:-0}
+SNOWFLAKE_IMAGE="thetorproject/snowflake-proxy:latest"
+SNOWFLAKE_ENABLED=${SNOWFLAKE_ENABLED:-false}
+SNOWFLAKE_COUNT=${SNOWFLAKE_COUNT:-1}
+SNOWFLAKE_CPUS=${SNOWFLAKE_CPUS:-}
+SNOWFLAKE_MEMORY=${SNOWFLAKE_MEMORY:-}
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
 TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
 TELEGRAM_INTERVAL=${TELEGRAM_INTERVAL:-6}
@@ -935,7 +973,6 @@ if ! command -v awk &>/dev/null; then
     echo -e "${YELLOW}Warning: awk not found. Some stats may not display correctly.${NC}"
 fi
 
-# Helper: Get container name by index (1-based)
 get_container_name() {
     local idx=${1:-1}
     if [ "$idx" -eq 1 ]; then
@@ -945,7 +982,6 @@ get_container_name() {
     fi
 }
 
-# Helper: Get volume name by index (1-based)
 get_volume_name() {
     local idx=${1:-1}
     if [ "$idx" -eq 1 ]; then
@@ -955,7 +991,6 @@ get_volume_name() {
     fi
 }
 
-# Helper: Fix volume permissions for conduit user (uid 1000)
 fix_volume_permissions() {
     local idx=${1:-0}
     if [ "$idx" -eq 0 ]; then
@@ -972,7 +1007,6 @@ fix_volume_permissions() {
     fi
 }
 
-# Helper: Start/recreate conduit container with current settings
 get_container_max_clients() {
     local idx=${1:-1}
     local var="MAX_CLIENTS_${idx}"
@@ -1009,7 +1043,7 @@ run_conduit_container() {
     local bw=$(get_container_bandwidth $idx)
     local cpus=$(get_container_cpus $idx)
     local mem=$(get_container_memory $idx)
-    # Remove any existing container with the same name to avoid conflicts
+    # Remove existing container if any
     if docker ps -a 2>/dev/null | grep -q "[[:space:]]${name}$"; then
         docker rm -f "$name" 2>/dev/null || true
     fi
@@ -1027,6 +1061,446 @@ run_conduit_container() {
         $resource_args \
         "$CONDUIT_IMAGE" \
         start --max-clients "$mc" --bandwidth "$bw" --stats-file
+}
+
+# ─── Snowflake Proxy Functions ─────────────────────────────────────────────────
+
+get_snowflake_name() {
+    local idx=${1:-1}
+    if [ "$idx" -le 1 ] 2>/dev/null; then
+        echo "snowflake-proxy"
+    else
+        echo "snowflake-proxy-${idx}"
+    fi
+}
+
+get_snowflake_volume() {
+    local idx=${1:-1}
+    if [ "$idx" -le 1 ] 2>/dev/null; then
+        echo "snowflake-data"
+    else
+        echo "snowflake-data-${idx}"
+    fi
+}
+
+get_snowflake_metrics_port() {
+    local idx=${1:-1}
+    echo $((10000 - idx))
+}
+
+get_snowflake_default_cpus() {
+    local cores=$(nproc 2>/dev/null || echo 1)
+    if [ "$cores" -ge 2 ]; then
+        echo "1.0"
+    else
+        echo "0.5"
+    fi
+}
+
+get_snowflake_default_memory() {
+    echo "256m"
+}
+
+get_snowflake_cpus() {
+    if [ -n "$SNOWFLAKE_CPUS" ]; then
+        echo "$SNOWFLAKE_CPUS"
+    else
+        get_snowflake_default_cpus
+    fi
+}
+
+get_snowflake_memory() {
+    if [ -n "$SNOWFLAKE_MEMORY" ]; then
+        echo "$SNOWFLAKE_MEMORY"
+    else
+        get_snowflake_default_memory
+    fi
+}
+
+run_snowflake_container() {
+    local idx=${1:-1}
+    local cname=$(get_snowflake_name $idx)
+    local vname=$(get_snowflake_volume $idx)
+    local mport=$(get_snowflake_metrics_port $idx)
+    local sf_cpus=$(get_snowflake_cpus)
+    local sf_mem=$(get_snowflake_memory)
+
+    # Remove existing container
+    docker rm -f "$cname" 2>/dev/null || true
+    docker volume create "$vname" 2>/dev/null || true
+
+    local actual_cpus=$(awk -v req="$sf_cpus" -v cores="$(nproc 2>/dev/null || echo 1)" \
+        'BEGIN{c=req+0; if(c>cores+0) c=cores+0; printf "%.2f",c}')
+
+    docker run -d \
+        --name "$cname" \
+        --restart unless-stopped \
+        --log-opt max-size=10m \
+        --log-opt max-file=3 \
+        --cpus "$actual_cpus" \
+        --memory "$sf_mem" \
+        --memory-swap "$sf_mem" \
+        --network host \
+        --health-cmd "wget -q -O /dev/null http://127.0.0.1:${mport}/internal/metrics || exit 1" \
+        --health-interval=300s \
+        --health-timeout=10s \
+        --health-retries=5 \
+        --health-start-period=3600s \
+        -v "${vname}:/var/lib/snowflake" \
+        "$SNOWFLAKE_IMAGE" \
+        -metrics -metrics-address "127.0.0.1" -metrics-port "${mport}" 2>/dev/null
+}
+
+stop_snowflake() {
+    local i
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        local cname=$(get_snowflake_name $i)
+        docker stop --timeout 10 "$cname" 2>/dev/null || true
+    done
+}
+
+start_snowflake() {
+    # Don't start if data cap exceeded
+    if [ -f "$PERSIST_DIR/data_cap_exceeded" ]; then
+        echo -e "${YELLOW}⚠ Data cap exceeded. Snowflake will not start.${NC}" 2>/dev/null
+        return 1
+    fi
+    local i
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        local cname=$(get_snowflake_name $i)
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+            echo -e "${GREEN}✓ ${cname} already running${NC}"
+        elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+            docker start "$cname" 2>/dev/null && echo -e "${GREEN}✓ ${cname} started${NC}" || echo -e "${RED}✗ Failed to start ${cname}${NC}"
+        else
+            run_snowflake_container $i && echo -e "${GREEN}✓ ${cname} created${NC}" || echo -e "${RED}✗ Failed to create ${cname}${NC}"
+        fi
+    done
+}
+
+restart_snowflake() {
+    # Don't restart if data cap exceeded
+    if [ -f "$PERSIST_DIR/data_cap_exceeded" ]; then
+        echo -e "${YELLOW}⚠ Data cap exceeded. Snowflake will not restart.${NC}" 2>/dev/null
+        return 1
+    fi
+    local i
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        local cname=$(get_snowflake_name $i)
+        echo -e "  Recreating ${cname}..."
+        run_snowflake_container $i && echo -e "  ${GREEN}✓ ${cname} restarted${NC}" || echo -e "  ${RED}✗ Failed${NC}"
+    done
+}
+
+is_snowflake_running() {
+    local i
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        local cname=$(get_snowflake_name $i)
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+get_snowflake_stats() {
+    # Returns: "connections inbound_bytes outbound_bytes timeouts"
+    local total_connections=0 total_inbound=0 total_outbound=0 total_timeouts=0
+    local i
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        local mport=$(get_snowflake_metrics_port $i)
+        local metrics=""
+        metrics=$(curl -s --max-time 3 "http://127.0.0.1:${mport}/internal/metrics" 2>/dev/null)
+        if [ -n "$metrics" ]; then
+            local parsed
+            parsed=$(echo "$metrics" | awk '
+                /^tor_snowflake_proxy_connections_total[{ ]/ { conns += $NF }
+                /^tor_snowflake_proxy_connection_timeouts_total / { to += $NF }
+                /^tor_snowflake_proxy_traffic_inbound_bytes_total / { ib += $NF }
+                /^tor_snowflake_proxy_traffic_outbound_bytes_total / { ob += $NF }
+                END { printf "%d %d %d %d", conns, ib, ob, to }
+            ' 2>/dev/null)
+            local p_conns p_ib p_ob p_to
+            read -r p_conns p_ib p_ob p_to <<< "$parsed"
+            total_connections=$((total_connections + ${p_conns:-0}))
+            total_inbound=$((total_inbound + ${p_ib:-0}))
+            total_outbound=$((total_outbound + ${p_ob:-0}))
+            total_timeouts=$((total_timeouts + ${p_to:-0}))
+        fi
+    done
+    # Snowflake Prometheus reports KB despite metric name saying bytes
+    total_inbound=$((total_inbound * 1000))
+    total_outbound=$((total_outbound * 1000))
+    echo "${total_connections} ${total_inbound} ${total_outbound} ${total_timeouts}"
+}
+
+get_snowflake_country_stats() {
+    # Returns top 10 countries by connection count
+    # Output: "count|CC" per line (e.g. "85|CN")
+    local all_metrics="" i
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        local mport=$(get_snowflake_metrics_port $i)
+        local m
+        m=$(curl -s --max-time 3 "http://127.0.0.1:${mport}/internal/metrics" 2>/dev/null)
+        [ -n "$m" ] && all_metrics="${all_metrics}${m}"$'\n'
+    done
+    [ -z "$all_metrics" ] && return
+    echo "$all_metrics" | sed -n 's/^tor_snowflake_proxy_connections_total{country="\([^"]*\)"} \([0-9]*\).*/\2|\1/p' | \
+        awk -F'|' '{ a[$2] += $1 } END { for(c in a) print a[c] "|" c }' | \
+        sort -t'|' -k1,1 -nr | head -10
+}
+
+show_snowflake_menu() {
+    while true; do
+        clear
+        echo ""
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║${NC}                         ${BOLD}SNOWFLAKE PROXY${NC}                          ${CYAN}║${NC}"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+            local sf_status="${RED}Stopped${NC}"
+            is_snowflake_running && sf_status="${GREEN}Running${NC}"
+            local cnt_label=""
+            [ "${SNOWFLAKE_COUNT:-1}" -gt 1 ] && cnt_label=" (${SNOWFLAKE_COUNT} instances)"
+            echo -e "  Status:      ${sf_status}${cnt_label}"
+            # Show stats if running
+            if is_snowflake_running; then
+                local sf_s=$(get_snowflake_stats 2>/dev/null)
+                local sf_conns=$(echo "$sf_s" | awk '{print $1}')
+                local sf_in=$(echo "$sf_s" | awk '{print $2}')
+                local sf_out=$(echo "$sf_s" | awk '{print $3}')
+                local sf_to=$(echo "$sf_s" | awk '{print $4}')
+                local _sf_to_lbl=""
+                [ "${sf_to:-0}" -gt 0 ] 2>/dev/null && _sf_to_lbl=" (${sf_to} timeouts)"
+                echo -e "  Served:      ${GREEN}${sf_conns:-0}${NC} connections${_sf_to_lbl}"
+                echo -e "  Traffic:     ↓ $(format_bytes ${sf_in:-0})  ↑ $(format_bytes ${sf_out:-0})"
+                # Per-country stats table
+                local country_data
+                country_data=$(get_snowflake_country_stats 2>/dev/null)
+                if [ -n "$country_data" ]; then
+                    echo ""
+                    printf "  ${BOLD}%-14s %10s %8s   %-20s${NC}\n" "Country" "Conns" "Pct" "Activity"
+                    local _cnt _cc _max_cnt=0
+                    # Find max for bar scaling
+                    while IFS='|' read -r _cnt _cc; do
+                        [ -z "$_cnt" ] && continue
+                        [ "$_cnt" -gt "$_max_cnt" ] 2>/dev/null && _max_cnt=$_cnt
+                    done <<< "$country_data"
+                    while IFS='|' read -r _cnt _cc; do
+                        [ -z "$_cnt" ] && continue
+                        local _pct=0
+                        [ "${sf_conns:-0}" -gt 0 ] 2>/dev/null && _pct=$(( (_cnt * 100) / sf_conns ))
+                        local _bar_len=0
+                        [ "$_max_cnt" -gt 0 ] 2>/dev/null && _bar_len=$(( (_cnt * 20) / _max_cnt ))
+                        [ "$_bar_len" -lt 1 ] && [ "$_cnt" -gt 0 ] && _bar_len=1
+                        local _bar=""
+                        local _bi
+                        for ((_bi=0; _bi<_bar_len; _bi++)); do _bar+="█"; done
+                        printf "  %-14s %10s %7s%%   ${MAGENTA}%s${NC}\n" "$_cc" "$_cnt" "$_pct" "$_bar"
+                    done <<< "$country_data"
+                fi
+            fi
+            echo -e "  Resources:   CPU $(get_snowflake_cpus)  RAM $(get_snowflake_memory) (per instance)"
+            echo ""
+            echo "  Options:"
+            echo "    1. Start all"
+            echo "    2. Stop all"
+            echo "    3. Restart all"
+            if [ "${SNOWFLAKE_COUNT:-1}" -eq 1 ]; then
+                echo "    4. Add 2nd instance"
+            else
+                echo "    4. Remove 2nd instance"
+            fi
+            echo "    5. Change resources"
+            echo "    6. View logs"
+            echo "    7. Remove Snowflake"
+            echo "    0. Back"
+            echo ""
+            local choice
+            read -p "  Choice: " choice < /dev/tty || return
+            case "$choice" in
+                1)
+                    echo ""
+                    start_snowflake
+                    ;;
+                2)
+                    echo ""
+                    stop_snowflake
+                    echo -e "  ${GREEN}✓ Snowflake stopped${NC}"
+                    ;;
+                3)
+                    echo ""
+                    restart_snowflake
+                    ;;
+                4)
+                    echo ""
+                    if [ "${SNOWFLAKE_COUNT:-1}" -eq 1 ]; then
+                        if [ -f "$PERSIST_DIR/data_cap_exceeded" ]; then
+                            echo -e "  ${YELLOW}⚠ Data cap exceeded. Cannot add instance.${NC}"
+                        else
+                            SNOWFLAKE_COUNT=2
+                            save_settings
+                            echo -e "  Creating 2nd instance..."
+                            run_snowflake_container 2 && echo -e "  ${GREEN}✓ 2nd instance added${NC}" || echo -e "  ${RED}✗ Failed${NC}"
+                        fi
+                    else
+                        local cname2=$(get_snowflake_name 2)
+                        docker rm -f "$cname2" 2>/dev/null || true
+                        SNOWFLAKE_COUNT=1
+                        save_settings
+                        echo -e "  ${GREEN}✓ 2nd instance removed${NC}"
+                    fi
+                    ;;
+                5)
+                    echo ""
+                    local new_cpus new_mem
+                    local cur_cpus=$(get_snowflake_cpus)
+                    local cur_mem=$(get_snowflake_memory)
+                    echo -e "  Current: CPU ${cur_cpus} | RAM ${cur_mem}"
+                    read -p "  CPU limit (e.g. 0.5, 1.0) [${cur_cpus}]: " new_cpus < /dev/tty || true
+                    read -p "  Memory limit (e.g. 256m, 512m) [${cur_mem}]: " new_mem < /dev/tty || true
+                    local _valid=true
+                    if [ -n "$new_cpus" ]; then
+                        if ! echo "$new_cpus" | grep -qE '^[0-9]+\.?[0-9]*$' || [ "$(awk "BEGIN{print ($new_cpus <= 0)}")" = "1" ]; then
+                            echo -e "  ${RED}Invalid CPU value. Must be a positive number.${NC}"
+                            _valid=false
+                        fi
+                    fi
+                    if [ -n "$new_mem" ]; then
+                        if ! echo "$new_mem" | grep -qiE '^[1-9][0-9]*[mMgG]$'; then
+                            echo -e "  ${RED}Invalid memory value. Use format like 256m or 1g.${NC}"
+                            _valid=false
+                        fi
+                    fi
+                    [ "$_valid" = false ] && continue
+                    [ -n "$new_cpus" ] && SNOWFLAKE_CPUS="$new_cpus"
+                    [ -n "$new_mem" ] && SNOWFLAKE_MEMORY="$new_mem"
+                    save_settings
+                    restart_snowflake && echo -e "  ${GREEN}✓ Resources updated and applied${NC}" || echo -e "  ${GREEN}✓ Resources saved (will apply on next start)${NC}"
+                    ;;
+                6)
+                    echo ""
+                    if ! is_snowflake_running; then
+                        echo -e "  ${YELLOW}Snowflake is not running.${NC}"
+                        echo ""
+                        read -n 1 -s -p "  Press any key to continue..." < /dev/tty || true
+                    else
+                        local _log_i _log_count=${SNOWFLAKE_COUNT:-1}
+                        for _log_i in $(seq 1 $_log_count); do
+                            local _log_name=$(get_snowflake_name $_log_i)
+                            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_log_name}$"; then
+                                echo -e "  ${CYAN}── Logs: ${BOLD}${_log_name}${NC} (last 30 lines) ──${NC}"
+                                echo ""
+                                docker logs --tail 30 "$_log_name" 2>&1 | sed 's/^/    /'
+                                echo ""
+                            fi
+                        done
+                        read -n 1 -s -p "  Press any key to continue..." < /dev/tty || true
+                    fi
+                    ;;
+                7)
+                    echo ""
+                    echo -e "  ${YELLOW}⚠ This will remove all Snowflake containers, volumes, and data.${NC}"
+                    local _confirm
+                    read -p "  Are you sure? (y/n): " _confirm < /dev/tty || return
+                    if [[ "${_confirm:-n}" =~ ^[Yy]$ ]]; then
+                        stop_snowflake
+                        local si
+                        for si in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+                            docker rm -f "$(get_snowflake_name $si)" 2>/dev/null || true
+                            docker volume rm "$(get_snowflake_volume $si)" 2>/dev/null || true
+                        done
+                        SNOWFLAKE_ENABLED=false
+                        SNOWFLAKE_COUNT=1
+                        save_settings
+                        echo -e "  ${GREEN}✓ Snowflake removed${NC}"
+                        return
+                    fi
+                    ;;
+                0|"")
+                    return
+                    ;;
+            esac
+        else
+            echo -e "  Status:      ${DIM}Disabled${NC}"
+            echo ""
+            echo -e "  Snowflake helps censored users access the internet via WebRTC."
+            echo -e "  No port forwarding needed. Runs on host networking."
+            echo ""
+            echo "  Options:"
+            echo "    1. Enable Snowflake Proxy"
+            echo "    0. Back"
+            echo ""
+            local choice
+            read -p "  Choice: " choice < /dev/tty || return
+            case "$choice" in
+                1)
+                    echo ""
+                    echo -e "  Pulling Snowflake image..."
+                    if ! docker pull "$SNOWFLAKE_IMAGE" 2>/dev/null; then
+                        echo -e "  ${RED}✗ Failed to pull image. Check internet connection.${NC}"
+                        continue
+                    fi
+                    echo -e "  ${GREEN}✓ Image ready${NC}"
+                    echo ""
+                    echo -e "  ${BOLD}Configure resources${NC} (press Enter to accept defaults):"
+                    echo ""
+                    local new_cpus new_mem
+                    read -p "  CPU limit (e.g. 0.5, 1.0) [$(get_snowflake_default_cpus)]: " new_cpus < /dev/tty || true
+                    read -p "  Memory limit (e.g. 256m, 512m) [$(get_snowflake_default_memory)]: " new_mem < /dev/tty || true
+                    if [ -n "$new_cpus" ]; then
+                        if echo "$new_cpus" | grep -qE '^[0-9]+\.?[0-9]*$' && [ "$(awk "BEGIN{print ($new_cpus > 0)}")" = "1" ]; then
+                            SNOWFLAKE_CPUS="$new_cpus"
+                        else
+                            echo -e "  ${YELLOW}Invalid CPU, using default.${NC}"
+                        fi
+                    fi
+                    if [ -n "$new_mem" ]; then
+                        if echo "$new_mem" | grep -qiE '^[1-9][0-9]*[mMgG]$'; then
+                            SNOWFLAKE_MEMORY="$new_mem"
+                        else
+                            echo -e "  ${YELLOW}Invalid memory, using default.${NC}"
+                        fi
+                    fi
+                    SNOWFLAKE_ENABLED=true
+                    SNOWFLAKE_COUNT=1
+                    save_settings
+                    echo ""
+                    if [ -f "$PERSIST_DIR/data_cap_exceeded" ]; then
+                        echo -e "  ${YELLOW}⚠ Snowflake enabled but data cap exceeded — container not started.${NC}"
+                        echo -e "  ${YELLOW}  It will start automatically when the cap resets.${NC}"
+                    else
+                        run_snowflake_container 1 && echo -e "  ${GREEN}✓ Snowflake proxy enabled and running!${NC}" || echo -e "  ${RED}✗ Failed to start container${NC}"
+                    fi
+                    ;;
+                0|"")
+                    return
+                    ;;
+            esac
+        fi
+    done
+}
+
+show_snowflake_status() {
+    if [ "$SNOWFLAKE_ENABLED" != "true" ]; then
+        echo -e "  Snowflake: ${DIM}Disabled${NC}"
+        return
+    fi
+    local sf_status="${RED}Stopped${NC}"
+    is_snowflake_running && sf_status="${GREEN}Running${NC}"
+    echo -e "  Snowflake: ${sf_status} (${SNOWFLAKE_COUNT:-1} instance(s))"
+    if is_snowflake_running; then
+        local sf_s=$(get_snowflake_stats 2>/dev/null)
+        local sf_conns=$(echo "$sf_s" | awk '{print $1}')
+        local sf_in=$(echo "$sf_s" | awk '{print $2}')
+        local sf_out=$(echo "$sf_s" | awk '{print $3}')
+        local sf_to=$(echo "$sf_s" | awk '{print $4}')
+        local _sf_to_lbl=""
+        [ "${sf_to:-0}" -gt 0 ] 2>/dev/null && _sf_to_lbl=" (${sf_to} timeouts)"
+        echo -e "  Served:      ${sf_conns:-0} connections${_sf_to_lbl}"
+        echo -e "  Traffic:     ↓ $(format_bytes ${sf_in:-0})  ↑ $(format_bytes ${sf_out:-0})"
+    fi
 }
 
 print_header() {
@@ -1173,13 +1647,9 @@ show_qr_code() {
 
 show_dashboard() {
     local stop_dashboard=0
-    # Setup trap to catch signals gracefully
     trap 'stop_dashboard=1' SIGINT SIGTERM
-    
-    # Use alternate screen buffer if available for smoother experience
     tput smcup 2>/dev/null || true
-    echo -ne "\033[?25l" # Hide cursor
-    # Initial clear
+    echo -ne "\033[?25l"
     clear
 
     while [ $stop_dashboard -eq 0 ]; do
@@ -1194,14 +1664,19 @@ show_dashboard() {
         show_status "live"
         
         # Check data cap
-        if [ "$DATA_CAP_GB" -gt 0 ] 2>/dev/null; then
+        if _has_any_data_cap; then
             local usage=$(get_data_usage)
             local used_rx=$(echo "$usage" | awk '{print $1}')
             local used_tx=$(echo "$usage" | awk '{print $2}')
-            local total_used=$((used_rx + used_tx + ${DATA_CAP_PRIOR_USAGE:-0}))
-            local cap_gb_fmt=$(format_gb $total_used)
+            local total_rx=$((used_rx + ${DATA_CAP_PRIOR_RX:-0}))
+            local total_tx=$((used_tx + ${DATA_CAP_PRIOR_TX:-0}))
+            local total_used=$((total_rx + total_tx))
             echo -e "${CYAN}═══ DATA USAGE ═══${NC}\033[K"
-            echo -e "  Usage: ${YELLOW}${cap_gb_fmt} GB${NC} / ${GREEN}${DATA_CAP_GB} GB${NC}\033[K"
+            local cap_info=""
+            [ "${DATA_CAP_UP_GB:-0}" -gt 0 ] 2>/dev/null && cap_info+="  up $(format_gb $total_tx)/${DATA_CAP_UP_GB}GB"
+            [ "${DATA_CAP_DOWN_GB:-0}" -gt 0 ] 2>/dev/null && cap_info+="  dn $(format_gb $total_rx)/${DATA_CAP_DOWN_GB}GB"
+            [ "${DATA_CAP_GB:-0}" -gt 0 ] 2>/dev/null && cap_info+="  total $(format_gb $total_used)/${DATA_CAP_GB}GB"
+            echo -e " ${cap_info}\033[K"
             if ! check_data_cap; then
                 echo -e "  ${RED}⚠ DATA CAP EXCEEDED - Containers stopped!${NC}\033[K"
             fi
@@ -1320,9 +1795,7 @@ show_dashboard() {
 }
 
 get_container_stats() {
-    # Get CPU and RAM usage across all conduit containers
     # Returns: "CPU_PERCENT RAM_USAGE"
-    # Single docker stats call for all containers at once
     local names=""
     for i in $(seq 1 $CONTAINER_COUNT); do
         names+=" $(get_container_name $i)"
@@ -1405,10 +1878,8 @@ get_system_stats() {
     for hwmon_dir in /sys/class/hwmon/hwmon*; do
         [ -d "$hwmon_dir" ] || continue
         local hwmon_name=$(cat "$hwmon_dir/name" 2>/dev/null)
-        # Match CPU thermal drivers: coretemp (Intel), k10temp (AMD), cpu_thermal/soc_thermal (ARM)
         case "$hwmon_name" in
             coretemp|k10temp|cpu_thermal|soc_thermal|cpu-thermal|thermal-fan-est)
-                # Read all core temperatures from this device
                 for temp_file in "$hwmon_dir"/temp*_input; do
                     [ -f "$temp_file" ] || continue
                     local temp_raw=$(cat "$temp_file" 2>/dev/null)
@@ -1457,7 +1928,6 @@ get_system_stats() {
 }
 
 show_live_stats() {
-    # Check if any container is running (single docker ps call)
     local ps_cache=$(docker ps --format '{{.Names}}' 2>/dev/null)
     local any_running=false
     for i in $(seq 1 $CONTAINER_COUNT); do
@@ -1518,21 +1988,15 @@ show_live_stats() {
     fi
 }
 
-# format_bytes() - Convert bytes to human-readable format (B, KB, MB, GB)
 format_bytes() {
     local bytes=$1
-
-    # Handle empty or zero input
     if [ -z "$bytes" ] || [ "$bytes" -eq 0 ] 2>/dev/null; then
         echo "0 B"
         return
     fi
-
-    # Convert based on size thresholds (using binary units)
-    # 1 GB = 1073741824 bytes (1024^3)
-    # 1 MB = 1048576 bytes (1024^2)
-    # 1 KB = 1024 bytes
-    if [ "$bytes" -ge 1073741824 ]; then
+    if [ "$bytes" -ge 1099511627776 ] 2>/dev/null; then
+        awk "BEGIN {printf \"%.2f TB\", $bytes/1099511627776}"
+    elif [ "$bytes" -ge 1073741824 ]; then
         awk "BEGIN {printf \"%.2f GB\", $bytes/1073741824}"
     elif [ "$bytes" -ge 1048576 ]; then
         awk "BEGIN {printf \"%.2f MB\", $bytes/1048576}"
@@ -1567,7 +2031,6 @@ is_tracker_active() {
     return $?
 }
 
-# Generate the background tracker script
 regenerate_tracker_script() {
     local tracker_script="$INSTALL_DIR/conduit-tracker.sh"
     local persist_dir="$INSTALL_DIR/traffic_stats"
@@ -1592,11 +2055,10 @@ SNAPSHOT_FILE="$PERSIST_DIR/tracker_snapshot"
 C_START_FILE="$PERSIST_DIR/container_start"
 GEOIP_CACHE="$PERSIST_DIR/geoip_cache"
 
-# Temporal sampling configuration (capture 15s, sleep 15s, multiply by 2)
-# This reduces CPU usage by ~40-50% while maintaining accurate traffic estimates
-SAMPLE_CAPTURE_TIME=15    # Seconds to capture packets
-SAMPLE_SLEEP_TIME=15      # Seconds to sleep between captures
-TRAFFIC_MULTIPLIER=2      # Multiply byte counts to compensate for sampling
+# Temporal sampling: capture 15s, sleep 15s, multiply by 2
+SAMPLE_CAPTURE_TIME=15
+SAMPLE_SLEEP_TIME=15
+TRAFFIC_MULTIPLIER=2
 
 # Connection tracking files
 CONN_HISTORY_FILE="$PERSIST_DIR/connection_history"
@@ -1604,6 +2066,8 @@ CONN_HISTORY_START="$PERSIST_DIR/connection_history_start"
 PEAK_CONN_FILE="$PERSIST_DIR/peak_connections"
 LAST_CONN_RECORD=0
 CONN_RECORD_INTERVAL=300  # Record every 5 minutes
+LAST_GEOIP_UPDATE=0
+GEOIP_UPDATE_INTERVAL=2592000  # 30 days in seconds
 
 # Get container name by index (matches main script naming)
 get_container_name() {
@@ -1648,14 +2112,12 @@ check_container_restart() {
     fi
 }
 
-# Count current connections from docker logs (lightweight)
 count_connections() {
     local total_conn=0
     local total_cing=0
     local count=${CONTAINER_COUNT:-1}
     for i in $(seq 1 $count); do
         local cname=$(get_container_name $i)
-        # Single docker logs call, parse both fields from same line
         local logdata=$(docker logs --tail 200 "$cname" 2>&1 | grep "\[STATS\]" | tail -1)
         local stats=$(echo "$logdata" | awk '{for(j=1;j<=NF;j++) if($j=="Connected:") print $(j+1)}')
         local cing=$(echo "$logdata" | awk '{for(j=1;j<=NF;j++) if($j=="Connecting:") print $(j+1)}')
@@ -1675,25 +2137,21 @@ record_connections() {
     fi
     LAST_CONN_RECORD=$now
 
-    # Check for container restart
     check_container_restart
 
-    # Get current connections
     local counts=$(count_connections)
     local connected=$(echo "$counts" | cut -d'|' -f1)
     local connecting=$(echo "$counts" | cut -d'|' -f2)
 
-    # Record to history
     echo "${now}|${connected}|${connecting}" >> "$CONN_HISTORY_FILE"
 
-    # Prune old entries (keep 25 hours)
+    # Prune entries older than 25 hours
     local cutoff=$((now - 90000))
     if [ -f "$CONN_HISTORY_FILE" ]; then
         awk -F'|' -v cutoff="$cutoff" '$1 >= cutoff' "$CONN_HISTORY_FILE" > "${CONN_HISTORY_FILE}.tmp" 2>/dev/null
         mv -f "${CONN_HISTORY_FILE}.tmp" "$CONN_HISTORY_FILE" 2>/dev/null
     fi
 
-    # Update peak if needed
     local current_peak=0
     if [ -f "$PEAK_CONN_FILE" ]; then
         current_peak=$(tail -1 "$PEAK_CONN_FILE" 2>/dev/null)
@@ -1753,7 +2211,7 @@ stored_start=""
 [ -f "$C_START_FILE" ] && stored_start=$(cat "$C_START_FILE" 2>/dev/null)
 if [ "$container_start" != "$stored_start" ]; then
     echo "$container_start" > "$C_START_FILE"
-    # Backup cumulative data before reset
+    # Backup before reset
     if [ -s "$STATS_FILE" ] || [ -s "$IPS_FILE" ]; then
         echo "[TRACKER] Container restart detected — backing up tracker data"
         [ -s "$STATS_FILE" ] && cp "$STATS_FILE" "$PERSIST_DIR/cumulative_data.bak"
@@ -1761,9 +2219,8 @@ if [ "$container_start" != "$stored_start" ]; then
         [ -s "$GEOIP_CACHE" ] && cp "$GEOIP_CACHE" "$PERSIST_DIR/geoip_cache.bak"
     fi
     rm -f "$STATS_FILE" "$IPS_FILE"
-    # Note: Don't clear SNAPSHOT_FILE here — keep stale speed data visible
-    # until the first 15-second capture cycle replaces it atomically
-    # Restore cumulative data (keep historical totals across restarts)
+    # Keep stale snapshot visible until first capture cycle replaces it
+    # Restore cumulative data across restarts
     if [ -f "$PERSIST_DIR/cumulative_data.bak" ]; then
         cp "$PERSIST_DIR/cumulative_data.bak" "$STATS_FILE"
         cp "$PERSIST_DIR/cumulative_ips.bak" "$IPS_FILE" 2>/dev/null
@@ -1772,30 +2229,25 @@ if [ "$container_start" != "$stored_start" ]; then
 fi
 touch "$STATS_FILE" "$IPS_FILE"
 
-# Detect tcpdump and awk paths
 TCPDUMP_BIN=$(command -v tcpdump 2>/dev/null || echo "tcpdump")
 AWK_BIN=$(command -v gawk 2>/dev/null || command -v awk 2>/dev/null || echo "awk")
 
-# Detect local IP and primary external interface
 LOCAL_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
 [ -z "$LOCAL_IP" ] && LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 
-# Detect primary external interface (to avoid double-counting on docker bridges)
+# Primary external interface (avoid docker bridge double-counting)
 CAPTURE_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
 [ -z "$CAPTURE_IFACE" ] && CAPTURE_IFACE=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
 [ -z "$CAPTURE_IFACE" ] && CAPTURE_IFACE="any"
 
-# Batch process: resolve GeoIP + merge into cumulative files in bulk
 process_batch() {
     local batch="$1"
     local resolved="$PERSIST_DIR/resolved_batch"
     local geo_map="$PERSIST_DIR/geo_map"
 
-    # Step 1: Extract unique IPs and bulk-resolve GeoIP
-    # Read cache once, resolve uncached, produce ip|country mapping
+    # Extract unique IPs and bulk-resolve GeoIP
     $AWK_BIN -F'|' '{print $2}' "$batch" | sort -u > "$PERSIST_DIR/batch_ips"
 
-    # Build geo mapping: read cache + resolve missing
     > "$geo_map"
     while IFS= read -r ip; do
         [ -z "$ip" ] && continue
@@ -1824,8 +2276,7 @@ process_batch() {
         echo "${ip}|${country}" >> "$geo_map"
     done < "$PERSIST_DIR/batch_ips"
 
-    # Step 2: Single awk pass — merge batch into cumulative_data + write snapshot
-    # MULT applies traffic multiplier for temporal sampling (capture 15s, sleep 15s = multiply by 2)
+    # Merge batch into cumulative_data + write snapshot (MULT compensates for sampling)
     $AWK_BIN -F'|' -v snap="${SNAPSHOT_TMP:-$SNAPSHOT_FILE}" -v MULT="$TRAFFIC_MULTIPLIER" '
         BEGIN { OFMT = "%.0f"; CONVFMT = "%.0f"; if (MULT == "") MULT = 1 }
         FILENAME == ARGV[1] { geo[$1] = $2; next }
@@ -1836,12 +2287,10 @@ process_batch() {
             if (c == "") c = "Unknown"
             if (dir == "FROM") from_bytes[c] += bytes
             else to_bytes[c] += bytes
-            # Also collect snapshot lines (with multiplied bytes for rate display)
             print dir "|" c "|" bytes "|" ip > snap
             next
         }
         END {
-            # Merge existing + new
             for (c in existing) {
                 split(existing[c], v, "|")
                 f = v[1] + 0; t = v[2] + 0
@@ -1851,7 +2300,6 @@ process_batch() {
                 delete from_bytes[c]
                 delete to_bytes[c]
             }
-            # New countries not in existing
             for (c in from_bytes) {
                 f = from_bytes[c] + 0
                 t = to_bytes[c] + 0
@@ -1864,7 +2312,7 @@ process_batch() {
         }
     ' "$geo_map" "$STATS_FILE" "$batch" > "$STATS_FILE.tmp" && mv "$STATS_FILE.tmp" "$STATS_FILE"
 
-    # Step 3: Single awk pass — merge batch IPs into cumulative_ips
+    # Merge batch IPs into cumulative_ips
     $AWK_BIN -F'|' '
         FILENAME == ARGV[1] { geo[$1] = $2; next }
         FILENAME == ARGV[2] { seen[$0] = 1; print; next }
@@ -1888,16 +2336,11 @@ STUCK_CHECK_INTERVAL=900  # Check every 15 minutes
 
 check_stuck_containers() {
     local now=$(date +%s)
-    # Skip if data cap exceeded (containers intentionally stopped)
-    if [ -f "$PERSIST_DIR/data_cap_exceeded" ]; then
-        return
-    fi
-    # Find all running conduit containers
+    [ -f "$PERSIST_DIR/data_cap_exceeded" ] && return
     local containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^conduit(-[0-9]+)?$')
     [ -z "$containers" ] && return
 
     for cname in $containers; do
-        # Get last 50 lines of logs
         local logs=$(docker logs --tail 50 "$cname" 2>&1)
         local has_stats
         has_stats=$(echo "$logs" | grep -c "\[STATS\]" 2>/dev/null) || true
@@ -1907,39 +2350,32 @@ check_stuck_containers() {
             local last_stat=$(echo "$logs" | grep "\[STATS\]" | tail -1)
             local parsed=$(echo "$last_stat" | sed -n 's/.*Connected:[[:space:]]*\([0-9]*\).*/\1/p')
             if [ -z "$parsed" ]; then
-                # Stats exist but format unrecognized — treat as active
                 CONTAINER_LAST_ACTIVE[$cname]=$now
                 continue
             fi
             connected=$parsed
         fi
 
-        # If container has peers or stats activity, mark as active
         if [ "$connected" -gt 0 ]; then
             CONTAINER_LAST_ACTIVE[$cname]=$now
             continue
         fi
 
-        # Initialize first-seen time if not tracked yet
         if [ -z "${CONTAINER_LAST_ACTIVE[$cname]:-}" ]; then
             CONTAINER_LAST_ACTIVE[$cname]=$now
             continue
         fi
 
-        # Check if stuck for 2+ hours
         local last_active=${CONTAINER_LAST_ACTIVE[$cname]:-$now}
         local idle_time=$((now - last_active))
         if [ "$idle_time" -ge "$STUCK_THRESHOLD" ]; then
-            # Check cooldown — don't restart if restarted within last 2 hours
             local last_restart=${CONTAINER_LAST_RESTART[$cname]:-0}
             if [ $((now - last_restart)) -lt "$STUCK_THRESHOLD" ]; then
                 continue
             fi
 
-            # Check container still exists and has been running long enough
             local started=$(docker inspect --format='{{.State.StartedAt}}' "$cname" 2>/dev/null | cut -d'.' -f1)
             if [ -z "$started" ]; then
-                # Container no longer exists, clean up tracking
                 unset CONTAINER_LAST_ACTIVE[$cname] 2>/dev/null
                 unset CONTAINER_LAST_RESTART[$cname] 2>/dev/null
                 continue
@@ -1954,29 +2390,29 @@ check_stuck_containers() {
             if docker restart "$cname" >/dev/null 2>&1; then
                 CONTAINER_LAST_RESTART[$cname]=$now
                 CONTAINER_LAST_ACTIVE[$cname]=$now
-                # Send Telegram alert if enabled
                 if [ "$TELEGRAM_ENABLED" = "true" ] && [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
-                    local safe_cname=$(escape_telegram_markdown "$cname")
-                    telegram_send_message "⚠️ *Conduit Alert*
-Container ${safe_cname} was stuck (no peers for $((idle_time/3600))h) and has been auto-restarted."
+                    local _msg="⚠️ *Conduit Alert*
+Container \`${cname}\` was stuck (no peers for $((idle_time/3600))h) and has been auto\\-restarted\\."
+                    curl -s --max-time 10 -X POST \
+                        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                        -d chat_id="$TELEGRAM_CHAT_ID" \
+                        -d parse_mode="MarkdownV2" \
+                        -d text="$_msg" >/dev/null 2>&1 || true
                 fi
             fi
         fi
     done
 }
 
-# Main capture loop with temporal sampling: capture -> process -> sleep -> repeat
-# This reduces CPU usage by ~40-50% while maintaining accurate traffic estimates
+# Main capture loop: capture -> process -> sleep -> repeat
 LAST_BACKUP=0
 while true; do
     BATCH_FILE="$PERSIST_DIR/batch_tmp"
     > "$BATCH_FILE"
 
-    # Capture phase: run tcpdump for SAMPLE_CAPTURE_TIME seconds
-    # timeout kills tcpdump after the specified time, AWK END block flushes remaining data
+    # Capture phase
     while IFS= read -r line; do
         if [ "$line" = "SYNC_MARKER" ]; then
-            # Process batch when we receive sync marker
             if [ -s "$BATCH_FILE" ]; then
                 > "${SNAPSHOT_FILE}.new"
                 SNAPSHOT_TMP="${SNAPSHOT_FILE}.new"
@@ -1986,12 +2422,31 @@ while true; do
             fi
             > "$BATCH_FILE"
 
-            # Periodic backup every 3 hours
             NOW=$(date +%s)
             if [ $((NOW - LAST_BACKUP)) -ge 10800 ]; then
                 [ -s "$STATS_FILE" ] && cp "$STATS_FILE" "$PERSIST_DIR/cumulative_data.bak"
                 [ -s "$IPS_FILE" ] && cp "$IPS_FILE" "$PERSIST_DIR/cumulative_ips.bak"
                 LAST_BACKUP=$NOW
+            fi
+
+            # Monthly GeoIP update
+            if [ $((NOW - LAST_GEOIP_UPDATE)) -ge "$GEOIP_UPDATE_INTERVAL" ]; then
+                _geoip_url="https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-Country.mmdb"
+                _geoip_dir="/usr/share/GeoIP"
+                _tmp_mmdb="/tmp/GeoLite2-Country.mmdb.$$"
+                mkdir -p "$_geoip_dir" 2>/dev/null
+                if curl -fsSL --max-time 60 --max-filesize 10485760 -o "$_tmp_mmdb" "$_geoip_url" 2>/dev/null; then
+                    _fsize=$(stat -c %s "$_tmp_mmdb" 2>/dev/null || stat -f %z "$_tmp_mmdb" 2>/dev/null || echo 0)
+                    if [ "$_fsize" -gt 1048576 ] 2>/dev/null; then
+                        mv "$_tmp_mmdb" "$_geoip_dir/GeoLite2-Country.mmdb"
+                        chmod 644 "$_geoip_dir/GeoLite2-Country.mmdb"
+                    else
+                        rm -f "$_tmp_mmdb"
+                    fi
+                else
+                    rm -f "$_tmp_mmdb" 2>/dev/null
+                fi
+                LAST_GEOIP_UPDATE=$NOW
             fi
         else
             echo "$line" >> "$BATCH_FILE"
@@ -1999,11 +2454,9 @@ while true; do
     done < <(timeout "$SAMPLE_CAPTURE_TIME" $TCPDUMP_BIN -tt -l -ni "$CAPTURE_IFACE" -n -q -s 64 "(tcp or udp) and not port 22" 2>/dev/null | $AWK_BIN -v local_ip="$LOCAL_IP" '
     BEGIN { OFMT = "%.0f"; CONVFMT = "%.0f" }
     {
-        # Parse timestamp
         ts = $1 + 0
         if (ts == 0) next
 
-        # Find IP keyword and extract src/dst
         src = ""; dst = ""
         for (i = 1; i <= NF; i++) {
             if ($i == "IP") {
@@ -2018,20 +2471,17 @@ while true; do
                 break
             }
         }
-        # Extract IP from IP.port
         if (sf != "") { n=split(sf,p,"."); if(n>=4) src=p[1]"."p[2]"."p[3]"."p[4] }
         if (df != "") { n=split(df,p,"."); if(n>=4) dst=p[1]"."p[2]"."p[3]"."p[4] }
 
-        # Get length
         len = 0
         for (i=1; i<=NF; i++) { if ($i=="length") { len=$(i+1)+0; break } }
         if (len==0) { for (i=NF; i>0; i--) { if ($i ~ /^[0-9]+$/) { len=$i+0; break } } }
 
-        # Skip private IPs
         if (src ~ /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|0\.|169\.254\.)/) src=""
         if (dst ~ /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|0\.|169\.254\.)/) dst=""
 
-        # Determine direction and accumulate
+        # Direction + accumulate
         if (src == local_ip && dst != "" && dst != local_ip) {
             to[dst] += len
         } else if (dst == local_ip && src != "" && src != local_ip) {
@@ -2057,11 +2507,8 @@ while true; do
         LAST_STUCK_CHECK=$NOW
     fi
 
-    # Record connection history and peak (every 5 min, lightweight)
     record_connections
 
-    # Sleep phase: pause before next capture cycle
-    # This is where CPU savings come from - tcpdump not running during sleep
     sleep "$SAMPLE_SLEEP_TIME"
 done
 TRACKER_SCRIPT
@@ -2069,9 +2516,7 @@ TRACKER_SCRIPT
     chmod +x "$tracker_script"
 }
 
-# Setup tracker systemd service
 setup_tracker_service() {
-    # Skip if tracker is disabled
     if [ "${TRACKER_ENABLED:-true}" = "false" ]; then
         return 0
     fi
@@ -2100,7 +2545,6 @@ EOF
     fi
 }
 
-# Stop tracker service
 stop_tracker_service() {
     if command -v systemctl &>/dev/null; then
         systemctl stop conduit-tracker.service 2>/dev/null || true
@@ -2109,9 +2553,7 @@ stop_tracker_service() {
     fi
 }
 
-# Advanced Statistics page with 15-second soft refresh
 show_advanced_stats() {
-    # Check if tracker is disabled
     if [ "${TRACKER_ENABLED:-true}" = "false" ]; then
         echo ""
         echo -e "  ${YELLOW}⚠ Tracker is disabled.${NC}"
@@ -2370,9 +2812,7 @@ show_advanced_stats() {
     trap - SIGINT SIGTERM
 }
 
-# show_peers() - Live peer traffic by country using tcpdump + GeoIP
 show_peers() {
-    # Check if tracker is disabled
     if [ "${TRACKER_ENABLED:-true}" = "false" ]; then
         echo ""
         echo -e "  ${YELLOW}⚠ Tracker is disabled.${NC}"
@@ -2389,7 +2829,6 @@ show_peers() {
 
     local persist_dir="$INSTALL_DIR/traffic_stats"
 
-    # Ensure tracker is running
     if ! is_tracker_active; then
         setup_tracker_service 2>/dev/null || true
     fi
@@ -2582,8 +3021,8 @@ show_peers() {
 get_net_speed() {
     # Calculate System Network Speed (Active 0.5s Sample)
     # Returns: "RX_MBPS TX_MBPS"
-    local iface=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $5}')
-    [ -z "$iface" ] && iface=$(ip route list default 2>/dev/null | awk '{print $5}')
+    local iface=$(ip route get 1.1.1.1 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}')
+    [ -z "$iface" ] && iface=$(ip route list default 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}')
     
     if [ -n "$iface" ] && [ -f "/sys/class/net/$iface/statistics/rx_bytes" ]; then
         local rx1=$(cat /sys/class/net/$iface/statistics/rx_bytes)
@@ -2781,6 +3220,88 @@ show_info_which_numbers() {
     read -n 1 -s -r -p "  Press any key to go back..." < /dev/tty
 }
 
+show_info_snowflake() {
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  SNOWFLAKE PROXY - WHAT IS IT?${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${YELLOW}What is Snowflake?${NC}"
+    echo -e "  Snowflake is a pluggable transport for ${BOLD}Tor${NC}, developed by"
+    echo -e "  the Tor Project. It helps users in heavily censored countries"
+    echo -e "  (like Iran, China, Russia) bypass internet censorship by"
+    echo -e "  disguising Tor traffic as regular WebRTC video calls."
+    echo ""
+    echo -e "${YELLOW}How Does It Work?${NC}"
+    echo -e "  ${BOLD}1.${NC} A censored user opens Tor Browser with Snowflake enabled"
+    echo -e "  ${BOLD}2.${NC} Their traffic is routed through ${CYAN}your proxy${NC} via WebRTC"
+    echo -e "  ${BOLD}3.${NC} To censors, it looks like a normal video call"
+    echo -e "  ${BOLD}4.${NC} Your proxy forwards traffic to the Tor network"
+    echo ""
+    echo -e "  ${DIM}Censored User${NC} --WebRTC--> ${CYAN}Your Snowflake${NC} --> ${GREEN}Tor Network${NC} --> Internet"
+    echo ""
+    echo -e "${YELLOW}Why Keep It Running?${NC}"
+    echo -e "  ${GREEN}•${NC} Each proxy helps ${BOLD}dozens of users simultaneously${NC}"
+    echo -e "  ${GREEN}•${NC} More proxies = harder for censors to block"
+    echo -e "  ${GREEN}•${NC} Uses minimal resources (0.5 CPU, 256MB RAM default)"
+    echo -e "  ${GREEN}•${NC} No port forwarding needed - works behind NAT"
+    echo -e "  ${GREEN}•${NC} Traffic is ${BOLD}end-to-end encrypted${NC} - you cannot see it"
+    echo ""
+    echo -e "${YELLOW}Is It Safe?${NC}"
+    echo -e "  ${GREEN}✓${NC} All traffic is encrypted end-to-end"
+    echo -e "  ${GREEN}✓${NC} You are a ${BOLD}relay${NC}, not an exit node - traffic exits"
+    echo -e "    through Tor's own exit nodes, not your server"
+    echo -e "  ${GREEN}✓${NC} Your IP is not exposed to the websites users visit"
+    echo -e "  ${GREEN}✓${NC} Endorsed by the Tor Project as a safe way to help"
+    echo ""
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    read -n 1 -s -r -p "  Press any key to go back..." < /dev/tty
+}
+
+show_info_safety() {
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  SAFETY & LEGAL - IS RUNNING A NODE SAFE?${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${YELLOW}Am I Responsible For What Users Browse?${NC}"
+    echo -e "  ${GREEN}No.${NC} You are providing ${BOLD}infrastructure${NC}, not content."
+    echo -e "  This is legally similar to running a Wi-Fi hotspot or"
+    echo -e "  being an ISP. You do not control, monitor, or select"
+    echo -e "  the traffic that flows through your node."
+    echo ""
+    echo -e "${YELLOW}Can I See User Traffic?${NC}"
+    echo -e "  ${GREEN}No.${NC} All connections are ${BOLD}end-to-end encrypted${NC}."
+    echo -e "  You cannot inspect, log, or read user traffic."
+    echo -e "  Psiphon uses strong encryption (TLS/DTLS) for all tunnels."
+    echo ""
+    echo -e "${YELLOW}What About Snowflake Traffic?${NC}"
+    echo -e "  Snowflake proxies relay traffic to the ${BOLD}Tor network${NC}."
+    echo -e "  Your server is a ${CYAN}middle relay${NC}, NOT an exit node."
+    echo -e "  Websites see Tor exit node IPs, ${GREEN}never your IP${NC}."
+    echo ""
+    echo -e "${YELLOW}What Data Is Stored?${NC}"
+    echo -e "  ${GREEN}•${NC} No user browsing data is stored on your server"
+    echo -e "  ${GREEN}•${NC} Only aggregate stats: connection counts, bandwidth totals"
+    echo -e "  ${GREEN}•${NC} IP addresses in tracker are anonymized country-level only"
+    echo -e "  ${GREEN}•${NC} Full uninstall removes everything: ${CYAN}conduit uninstall${NC}"
+    echo ""
+    echo -e "${YELLOW}Legal Protections${NC}"
+    echo -e "  In most jurisdictions, relay operators are protected by:"
+    echo -e "  ${GREEN}•${NC} ${BOLD}Common carrier${NC} / safe harbor provisions"
+    echo -e "  ${GREEN}•${NC} Section 230 (US) - intermediary liability protection"
+    echo -e "  ${GREEN}•${NC} EU E-Commerce Directive Art. 12 - mere conduit defense"
+    echo -e "  ${GREEN}•${NC} Psiphon is a ${BOLD}registered Canadian non-profit${NC} backed by"
+    echo -e "    organizations including the US State Department"
+    echo ""
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${BOLD}Bottom line:${NC} Running a Conduit node is safe. You are helping"
+    echo -e "  people access the free internet, and you are legally"
+    echo -e "  protected as an infrastructure provider."
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    read -n 1 -s -r -p "  Press any key to go back..." < /dev/tty
+}
+
 # Main info menu
 show_dashboard_info() {
     while true; do
@@ -2818,16 +3339,13 @@ show_dashboard_info() {
     done
 }
 
-# Connection history file for tracking connections over time
 CONNECTION_HISTORY_FILE="/opt/conduit/traffic_stats/connection_history"
 _LAST_HISTORY_RECORD=0
 
-# Peak connections tracking (persistent, resets on container restart)
 PEAK_CONNECTIONS_FILE="/opt/conduit/traffic_stats/peak_connections"
 _PEAK_CONNECTIONS=0
 _PEAK_CONTAINER_START=""
 
-# Get the earliest container start time (used to detect restarts)
 get_container_start_time() {
     local earliest=""
     for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
@@ -2858,7 +3376,7 @@ load_peak_connections() {
         fi
     fi
 
-    # Container restarted or no saved data - reset peak
+    # Reset peak on container restart
     _PEAK_CONNECTIONS=0
     _PEAK_CONTAINER_START="$current_start"
     save_peak_connections
@@ -2871,7 +3389,6 @@ save_peak_connections() {
     echo "$_PEAK_CONNECTIONS" >> "$PEAK_CONNECTIONS_FILE"
 }
 
-# Connection history container tracking (resets when containers restart)
 CONNECTION_HISTORY_START_FILE="/opt/conduit/traffic_stats/connection_history_start"
 _CONNECTION_HISTORY_CONTAINER_START=""
 
@@ -2889,39 +3406,29 @@ check_connection_history_reset() {
         fi
     fi
 
-    # Container restarted or new session - clear history
+    # Reset history on container restart
     _CONNECTION_HISTORY_CONTAINER_START="$current_start"
     mkdir -p "$(dirname "$CONNECTION_HISTORY_START_FILE")" 2>/dev/null
     echo "$current_start" > "$CONNECTION_HISTORY_START_FILE"
 
-    # Clear history file and invalidate average cache
     rm -f "$CONNECTION_HISTORY_FILE" 2>/dev/null
     _AVG_CONN_CACHE=""
     _AVG_CONN_CACHE_TIME=0
 }
 
-# Record current connection count to history (called every ~5 minutes)
 record_connection_history() {
     local connected=$1
     local connecting=$2
     local now=$(date +%s)
 
-    # Only record every 5 minutes (300 seconds)
-    if [ $(( now - _LAST_HISTORY_RECORD )) -lt 300 ]; then
-        return
-    fi
+    if [ $(( now - _LAST_HISTORY_RECORD )) -lt 300 ]; then return; fi
     _LAST_HISTORY_RECORD=$now
 
-    # Check if containers restarted (reset history if so)
     check_connection_history_reset
-
-    # Ensure directory exists
     mkdir -p "$(dirname "$CONNECTION_HISTORY_FILE")" 2>/dev/null
-
-    # Append current snapshot
     echo "${now}|${connected}|${connecting}" >> "$CONNECTION_HISTORY_FILE"
 
-    # Prune entries older than 25 hours (keep some buffer)
+    # Prune entries older than 25 hours
     local cutoff=$((now - 90000))
     if [ -f "$CONNECTION_HISTORY_FILE" ]; then
         awk -F'|' -v cutoff="$cutoff" '$1 >= cutoff' "$CONNECTION_HISTORY_FILE" > "${CONNECTION_HISTORY_FILE}.tmp" 2>/dev/null
@@ -2929,21 +3436,15 @@ record_connection_history() {
     fi
 }
 
-# Average connections cache (recalculate every 5 minutes)
 _AVG_CONN_CACHE=""
 _AVG_CONN_CACHE_TIME=0
 
-# Get average connections since container started (cached for 5 min)
 get_average_connections() {
     local now=$(date +%s)
-
-    # Return cached value if less than 5 minutes old
     if [ -n "$_AVG_CONN_CACHE" ] && [ $((now - _AVG_CONN_CACHE_TIME)) -lt 300 ]; then
         echo "$_AVG_CONN_CACHE"
         return
     fi
-
-    # Check if containers restarted (clear stale history)
     check_connection_history_reset
 
     if [ ! -f "$CONNECTION_HISTORY_FILE" ]; then
@@ -2953,7 +3454,6 @@ get_average_connections() {
         return
     fi
 
-    # Calculate average from all entries in history
     local avg=$(awk -F'|' '
         NF >= 2 { sum += $2; count++ }
         END { if (count > 0) printf "%.0f", sum/count; else print "-" }
@@ -2964,14 +3464,11 @@ get_average_connections() {
     echo "$_AVG_CONN_CACHE"
 }
 
-# Get connection snapshot from N hours ago (returns "connected|connecting" or "-|-")
 get_connection_snapshot() {
     local hours_ago=$1
     local now=$(date +%s)
     local target=$((now - (hours_ago * 3600)))
-    local tolerance=1800  # 30 minute tolerance window
-
-    # Check if containers restarted (clear stale history)
+    local tolerance=1800
     check_connection_history_reset
 
     if [ ! -f "$CONNECTION_HISTORY_FILE" ]; then
@@ -2979,7 +3476,6 @@ get_connection_snapshot() {
         return
     fi
 
-    # Find closest entry to target time within tolerance
     local result=$(awk -F'|' -v target="$target" -v tol="$tolerance" '
         BEGIN { best_diff = tol + 1; best = "-|-" }
         {
@@ -2995,12 +3491,189 @@ get_connection_snapshot() {
     echo "${result:--|-}"
 }
 
-# Global cache for container stats (persists between show_status calls)
 declare -A _STATS_CACHE_UP _STATS_CACHE_DOWN _STATS_CACHE_CONN _STATS_CACHE_CING
-
-# Global cache for docker stats (CPU/RAM) - refreshes every 2 cycles (20s)
 _DOCKER_STATS_CACHE=""
 _DOCKER_STATS_CYCLE=0
+
+status_json() {
+    local ts=$(date +%s)
+    local hn=$(hostname 2>/dev/null || echo "unknown")
+    hn="${hn//\"/}"
+    hn="${hn//\\/}"
+
+    local docker_names=$(docker ps --format '{{.Names}}' 2>/dev/null)
+    local running_count=0
+    local total_conn=0 total_cing=0
+    local total_up_bytes=0 total_down_bytes=0
+
+    for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+        local cname=$(get_container_name $i)
+        if echo "$docker_names" | grep -q "^${cname}$"; then
+            running_count=$((running_count + 1))
+        fi
+    done
+
+    local _jt=$(mktemp -d /tmp/.conduit_json.XXXXXX)
+    for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+        local cname=$(get_container_name $i)
+        if echo "$docker_names" | grep -q "^${cname}$"; then
+            ( docker logs --tail 200 "$cname" 2>&1 | grep "\[STATS\]" | tail -1 > "$_jt/logs_$i" ) &
+        fi
+    done
+
+    # Resource stats in parallel
+    ( get_container_stats > "$_jt/cstats" ) &
+    ( get_system_stats > "$_jt/sys" ) &
+    wait
+
+    # Parse container logs
+    for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+        if [ -f "$_jt/logs_$i" ]; then
+            local logs=$(cat "$_jt/logs_$i")
+            if [ -n "$logs" ]; then
+                local conn cing up_b down_b
+                IFS='|' read -r cing conn up_b down_b _ <<< $(echo "$logs" | awk '{
+                    ci=0; co=0; up=""; down=""
+                    for(j=1;j<=NF;j++){
+                        if($j=="Connecting:") ci=$(j+1)+0
+                        else if($j=="Connected:") co=$(j+1)+0
+                        else if($j=="Up:"){for(k=j+1;k<=NF;k++){if($k=="|"||$k~/Down:/)break; up=up (up?" ":"") $k}}
+                        else if($j=="Down:"){for(k=j+1;k<=NF;k++){if($k=="|"||$k~/Uptime:/)break; down=down (down?" ":"") $k}}
+                    }
+                    printf "%d|%d|%s|%s|", ci, co, up, down
+                }')
+                total_conn=$((total_conn + ${conn:-0}))
+                total_cing=$((total_cing + ${cing:-0}))
+                # Convert upload to bytes
+                if [ -n "$up_b" ]; then
+                    local ub=$(echo "$up_b" | awk '{
+                        val=$1; unit=toupper($2)
+                        if (unit ~ /^KB/) val*=1024
+                        else if (unit ~ /^MB/) val*=1048576
+                        else if (unit ~ /^GB/) val*=1073741824
+                        else if (unit ~ /^TB/) val*=1099511627776
+                        printf "%.0f", val
+                    }')
+                    total_up_bytes=$((total_up_bytes + ${ub:-0}))
+                fi
+                # Convert download to bytes
+                if [ -n "$down_b" ]; then
+                    local db=$(echo "$down_b" | awk '{
+                        val=$1; unit=toupper($2)
+                        if (unit ~ /^KB/) val*=1024
+                        else if (unit ~ /^MB/) val*=1048576
+                        else if (unit ~ /^GB/) val*=1073741824
+                        else if (unit ~ /^TB/) val*=1099511627776
+                        printf "%.0f", val
+                    }')
+                    total_down_bytes=$((total_down_bytes + ${db:-0}))
+                fi
+            fi
+        fi
+    done
+
+    # Uptime calculation
+    local uptime_sec=0
+    local uptime_str="-"
+    local earliest_start=""
+    for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+        local cname=$(get_container_name $i)
+        local started=$(docker inspect --format='{{.State.StartedAt}}' "$cname" 2>/dev/null | cut -d'.' -f1)
+        [ -z "$started" ] && continue
+        local se=$(date -d "$started" +%s 2>/dev/null || echo 0)
+        if [ -z "$earliest_start" ] || { [ "$se" -gt 0 ] && [ "$se" -lt "$earliest_start" ]; } 2>/dev/null; then
+            earliest_start=$se
+        fi
+    done
+    if [ -n "$earliest_start" ] && [ "$earliest_start" -gt 0 ] 2>/dev/null; then
+        uptime_sec=$((ts - earliest_start))
+        local d=$((uptime_sec / 86400)) h=$(( (uptime_sec % 86400) / 3600 )) m=$(( (uptime_sec % 3600) / 60 ))
+        uptime_str="${d}d ${h}h ${m}m"
+    fi
+
+    # Parse resource stats
+    local stats=$(cat "$_jt/cstats" 2>/dev/null)
+    local sys_stats=$(cat "$_jt/sys" 2>/dev/null)
+    rm -rf "$_jt"
+
+    local raw_app_cpu=$(echo "$stats" | awk '{print $1}' | tr -d '%')
+    local num_cores=$(get_cpu_cores)
+    local app_cpu="0%"
+    if [[ "$raw_app_cpu" =~ ^[0-9.]+$ ]]; then
+        app_cpu=$(awk -v cpu="$raw_app_cpu" -v cores="$num_cores" 'BEGIN {printf "%.2f%%", cpu / cores}')
+    fi
+    local app_ram=$(echo "$stats" | awk '{print $2, $3, $4}')
+    [ -z "$app_ram" ] && app_ram="-"
+
+    local sys_cpu=$(echo "$sys_stats" | awk '{print $1}')
+    local sys_temp=$(echo "$sys_stats" | awk '{print $2}')
+    local sys_ram_used=$(echo "$sys_stats" | awk '{print $3}')
+    local sys_ram_total=$(echo "$sys_stats" | awk '{print $4}')
+
+    # Tracker stats
+    local data_served=0 data_in=0 data_out=0 unique_ips=0
+    local data_file="$INSTALL_DIR/traffic_stats/cumulative_data"
+    if [ -s "$data_file" ]; then
+        local _ds
+        _ds=$(awk -F'|' '{i+=$2+0; o+=$3+0} END{printf "%d %d", i, o}' "$data_file" 2>/dev/null)
+        data_in=$(echo "$_ds" | awk '{print $1}')
+        data_out=$(echo "$_ds" | awk '{print $2}')
+        data_served=$((data_in + data_out))
+    fi
+    local ips_file="$INSTALL_DIR/traffic_stats/cumulative_ips"
+    [ -s "$ips_file" ] && unique_ips=$(wc -l < "$ips_file" 2>/dev/null || echo 0)
+
+    # Restart count
+    local total_restarts=0
+    for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+        local cname=$(get_container_name $i)
+        local rc=$(docker inspect --format='{{.RestartCount}}' "$cname" 2>/dev/null || echo 0)
+        total_restarts=$((total_restarts + ${rc:-0}))
+    done
+
+    # Status determination
+    local status="stopped"
+    [ "$running_count" -gt 0 ] && status="running"
+    [ "$running_count" -gt 0 ] && [ "$running_count" -lt "${CONTAINER_COUNT:-1}" ] && status="degraded"
+
+    # Build JSON
+    printf '{"version":"%s",' "$VERSION"
+    printf '"timestamp":%d,' "$ts"
+    printf '"hostname":"%s",' "$hn"
+    printf '"status":"%s",' "$status"
+    printf '"containers":{"total":%d,"running":%d},' "${CONTAINER_COUNT:-1}" "$running_count"
+    printf '"peers":{"connected":%d,"connecting":%d},' "$total_conn" "$total_cing"
+    printf '"bandwidth":{"upload_bytes":%d,"download_bytes":%d,' "$total_up_bytes" "$total_down_bytes"
+    printf '"upload_human":"%s","download_human":"%s"},' "$(format_bytes $total_up_bytes)" "$(format_bytes $total_down_bytes)"
+    printf '"uptime":"%s","uptime_seconds":%d,' "$uptime_str" "$uptime_sec"
+    printf '"sys_cpu":"%s","sys_temp":"%s",' "${sys_cpu:-0%}" "${sys_temp:--}"
+    printf '"sys_ram_used":"%s","sys_ram_total":"%s",' "${sys_ram_used:-N/A}" "${sys_ram_total:-N/A}"
+    printf '"app_cpu":"%s","app_ram":"%s",' "$app_cpu" "${app_ram:--}"
+    printf '"data_served_bytes":%d,"data_served_human":"%s",' \
+        "${data_served:-0}" "$(format_bytes ${data_served:-0})"
+    printf '"tracker_in_bytes":%d,"tracker_out_bytes":%d,"unique_ips":%d,' \
+        "${data_in:-0}" "${data_out:-0}" "${unique_ips:-0}"
+    printf '"restarts":%d,' "$total_restarts"
+    printf '"settings":{"max_clients":%d,"bandwidth":"%s","container_count":%d,"data_cap_gb":%d,"data_cap_up_gb":%d,"data_cap_down_gb":%d},' \
+        "${MAX_CLIENTS:-200}" "${BANDWIDTH:-5}" "${CONTAINER_COUNT:-1}" "${DATA_CAP_GB:-0}" "${DATA_CAP_UP_GB:-0}" "${DATA_CAP_DOWN_GB:-0}"
+    local sf_enabled="${SNOWFLAKE_ENABLED:-false}"
+    local sf_running=false
+    local sf_conn=0 sf_in=0 sf_out=0 sf_to=0
+    if [ "$sf_enabled" = "true" ] && is_snowflake_running; then
+        sf_running=true
+        local sf_stats=$(get_snowflake_stats 2>/dev/null)
+        sf_conn=$(echo "$sf_stats" | awk '{print $1+0}')
+        sf_in=$(echo "$sf_stats" | awk '{print $2+0}')
+        sf_out=$(echo "$sf_stats" | awk '{print $3+0}')
+        sf_to=$(echo "$sf_stats" | awk '{print $4+0}')
+    fi
+    local sf_enabled_json="false" sf_running_json="false"
+    [ "$sf_enabled" = "true" ] && sf_enabled_json="true"
+    [ "$sf_running" = "true" ] && sf_running_json="true"
+    printf '"snowflake":{"enabled":%s,"running":%s,"instances":%d,"connections":%d,"inbound_bytes":%d,"outbound_bytes":%d,"timeouts":%d}' \
+        "$sf_enabled_json" "$sf_running_json" "${SNOWFLAKE_COUNT:-1}" "${sf_conn:-0}" "${sf_in:-0}" "${sf_out:-0}" "${sf_to:-0}"
+    printf '}\n'
+}
 
 show_status() {
     local mode="${1:-normal}" # 'live' mode adds line clearing
@@ -3017,10 +3690,7 @@ show_status() {
     echo ""
 
 
-    # Cache docker ps output once
     local docker_ps_cache=$(docker ps 2>/dev/null)
-
-    # Count running containers and cache per-container stats
     local running_count=0
     declare -A _c_running _c_conn _c_cing _c_up _c_down
     local total_connecting=0
@@ -3091,16 +3761,12 @@ show_status() {
     rm -rf "$_st_tmpdir"
     local connecting=$total_connecting
     local connected=$total_connected
-    # Export for parent function to reuse (avoids duplicate docker logs calls)
     _total_connected=$total_connected
-
-    # Update peak connections if current exceeds peak (and save to file)
     if [ "$connected" -gt "$_PEAK_CONNECTIONS" ] 2>/dev/null; then
         _PEAK_CONNECTIONS=$connected
         save_peak_connections
     fi
 
-    # Aggregate upload/download across all containers
     local upload=""
     local download=""
     local total_up_bytes=0
@@ -3260,7 +3926,7 @@ show_status() {
     
     echo -e "${EL}"
     echo -e "${CYAN}═══ SETTINGS ═══${NC}${EL}"
-    # Check if any per-container overrides exist
+    # Per-container overrides?
     local has_overrides=false
     for i in $(seq 1 $CONTAINER_COUNT); do
         local mc_var="MAX_CLIENTS_${i}"
@@ -3288,22 +3954,42 @@ show_status() {
         fi
         echo -e "  Containers:   ${CONTAINER_COUNT}${EL}"
     fi
-    if [ "$DATA_CAP_GB" -gt 0 ] 2>/dev/null; then
+    if _has_any_data_cap; then
         local usage=$(get_data_usage)
         local used_rx=$(echo "$usage" | awk '{print $1}')
         local used_tx=$(echo "$usage" | awk '{print $2}')
-        local total_used=$((used_rx + used_tx + ${DATA_CAP_PRIOR_USAGE:-0}))
-        echo -e "  Data Cap:     $(format_gb $total_used) / ${DATA_CAP_GB} GB${EL}"
+        local total_rx=$((used_rx + ${DATA_CAP_PRIOR_RX:-0}))
+        local total_tx=$((used_tx + ${DATA_CAP_PRIOR_TX:-0}))
+        local total_used=$((total_rx + total_tx))
+        local cap_line="  Data Cap:    "
+        [ "${DATA_CAP_UP_GB:-0}" -gt 0 ] 2>/dev/null && cap_line+=" up $(format_gb $total_tx)/${DATA_CAP_UP_GB}GB"
+        [ "${DATA_CAP_DOWN_GB:-0}" -gt 0 ] 2>/dev/null && cap_line+=" dn $(format_gb $total_rx)/${DATA_CAP_DOWN_GB}GB"
+        [ "${DATA_CAP_GB:-0}" -gt 0 ] 2>/dev/null && cap_line+=" total $(format_gb $total_used)/${DATA_CAP_GB}GB"
+        echo -e "${cap_line}${EL}"
     fi
 
-    
+    if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+        local sf_stat="${RED}Stopped${NC}"
+        is_snowflake_running && sf_stat="${GREEN}Running${NC}"
+        local sf_line="  Snowflake:    ${sf_stat} (${SNOWFLAKE_COUNT:-1})"
+        if is_snowflake_running; then
+            local sf_s=$(get_snowflake_stats 2>/dev/null)
+            local sf_c=$(echo "$sf_s" | awk '{print $1}')
+            local sf_i=$(echo "$sf_s" | awk '{print $2}')
+            local sf_o=$(echo "$sf_s" | awk '{print $3}')
+            sf_line+=" | connections served: ${sf_c:-0}"
+            sf_line+=" | ↓$(format_bytes ${sf_i:-0}) ↑$(format_bytes ${sf_o:-0})"
+        fi
+        echo -e "${sf_line}${EL}"
+    fi
+
+
     echo -e "${EL}"
     echo -e "${CYAN}═══ AUTO-START SERVICE ═══${NC}${EL}"
-    # Check for systemd
     if command -v systemctl &>/dev/null && systemctl is-enabled conduit.service 2>/dev/null | grep -q "enabled"; then
         echo -e "  Auto-start:   ${GREEN}Enabled (systemd)${NC}${EL}"
-        # Show service based on actual container state (systemd oneshot status is unreliable)
-        local svc_containers=$(docker ps --filter "name=^conduit" --format '{{.Names}}' 2>/dev/null | wc -l)
+        # Use container state instead of unreliable oneshot status
+        local svc_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -cE "^conduit(-[0-9]+)?$" || echo 0)
         if [ "${svc_containers:-0}" -gt 0 ] 2>/dev/null; then
             echo -e "  Service:      ${GREEN}active${NC}${EL}"
         else
@@ -3329,15 +4015,38 @@ show_status() {
 }
 
 start_conduit() {
-    # Check data cap before starting
-    if [ "$DATA_CAP_GB" -gt 0 ] 2>/dev/null; then
+    local _auto="${1:-}"
+    local _state_file="$INSTALL_DIR/.user_stopped"
+
+    # Respect user's manual stop on systemd boot
+    if [ "$_auto" = "--auto" ] && [ -f "$_state_file" ]; then
+        echo "Conduit was manually stopped by user. Skipping auto-start."
+        echo "Run 'conduit start' to resume."
+        return 0
+    fi
+    rm -f "$_state_file"
+    if _has_any_data_cap; then
         local usage=$(get_data_usage)
         local used_rx=$(echo "$usage" | awk '{print $1}')
         local used_tx=$(echo "$usage" | awk '{print $2}')
-        local total_used=$((used_rx + used_tx + ${DATA_CAP_PRIOR_USAGE:-0}))
-        local cap_bytes=$(awk -v gb="$DATA_CAP_GB" 'BEGIN{printf "%.0f", gb * 1073741824}')
-        if [ "$total_used" -ge "$cap_bytes" ] 2>/dev/null; then
-            echo -e "${RED}⚠ Data cap exceeded ($(format_gb $total_used) / ${DATA_CAP_GB} GB). Containers will not start.${NC}"
+        local total_rx=$((used_rx + ${DATA_CAP_PRIOR_RX:-0}))
+        local total_tx=$((used_tx + ${DATA_CAP_PRIOR_TX:-0}))
+        local total_used=$((total_rx + total_tx))
+        local cap_hit=""
+        if [ "${DATA_CAP_UP_GB:-0}" -gt 0 ] 2>/dev/null; then
+            local up_cap=$(awk -v gb="$DATA_CAP_UP_GB" 'BEGIN{printf "%.0f", gb * 1073741824}')
+            [ "$total_tx" -ge "$up_cap" ] 2>/dev/null && cap_hit="Upload cap exceeded ($(format_gb $total_tx) / ${DATA_CAP_UP_GB} GB)"
+        fi
+        if [ -z "$cap_hit" ] && [ "${DATA_CAP_DOWN_GB:-0}" -gt 0 ] 2>/dev/null; then
+            local down_cap=$(awk -v gb="$DATA_CAP_DOWN_GB" 'BEGIN{printf "%.0f", gb * 1073741824}')
+            [ "$total_rx" -ge "$down_cap" ] 2>/dev/null && cap_hit="Download cap exceeded ($(format_gb $total_rx) / ${DATA_CAP_DOWN_GB} GB)"
+        fi
+        if [ -z "$cap_hit" ] && [ "${DATA_CAP_GB:-0}" -gt 0 ] 2>/dev/null; then
+            local total_cap=$(awk -v gb="$DATA_CAP_GB" 'BEGIN{printf "%.0f", gb * 1073741824}')
+            [ "$total_used" -ge "$total_cap" ] 2>/dev/null && cap_hit="Total cap exceeded ($(format_gb $total_used) / ${DATA_CAP_GB} GB)"
+        fi
+        if [ -n "$cap_hit" ]; then
+            echo -e "${RED}⚠ ${cap_hit}. Containers will not start.${NC}"
             echo -e "${YELLOW}Reset or increase the data cap from the menu to start containers.${NC}"
             return 1
         fi
@@ -3345,45 +4054,58 @@ start_conduit() {
 
     echo "Starting Conduit ($CONTAINER_COUNT container(s))..."
 
-    # Check if any stopped containers exist that will be recreated
-    local has_stopped=false
-    for i in $(seq 1 $CONTAINER_COUNT); do
-        local name=$(get_container_name $i)
-        if docker ps -a 2>/dev/null | grep -q "[[:space:]]${name}$"; then
-            if ! docker ps 2>/dev/null | grep -q "[[:space:]]${name}$"; then
-                has_stopped=true
-                break
-            fi
-        fi
-    done
-    if [ "$has_stopped" = true ]; then
-        echo -e "${YELLOW}⚠ Note: This will remove and recreate stopped containers with fresh instances.${NC}"
-        echo -e "${YELLOW}  Your data volumes are preserved, but container logs will be reset.${NC}"
-        echo -e "${YELLOW}  To resume stopped containers without recreating, use the 'c' menu → [s].${NC}"
-        read -p "  Continue? (y/n): " confirm < /dev/tty || true
-        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-            echo -e "  ${CYAN}Cancelled.${NC}"
-            return 0
-        fi
-    fi
+    # Batch: get all existing containers in one docker call
+    local existing_containers=$(docker ps -a --format '{{.Names}}' 2>/dev/null)
+    local running_containers=$(docker ps --format '{{.Names}}' 2>/dev/null)
 
     for i in $(seq 1 $CONTAINER_COUNT); do
         local name=$(get_container_name $i)
         local vol=$(get_volume_name $i)
 
-        # Check if container exists (running or stopped)
-        if docker ps -a 2>/dev/null | grep -q "[[:space:]]${name}$"; then
-            if docker ps 2>/dev/null | grep -q "[[:space:]]${name}$"; then
-                echo -e "${GREEN}✓ ${name} is already running${NC}"
-                continue
+        if echo "$running_containers" | grep -q "^${name}$"; then
+            # Already running — skip
+            echo -e "${GREEN}✓ ${name} is already running${NC}"
+            continue
+        elif echo "$existing_containers" | grep -q "^${name}$"; then
+            # Exists but stopped — check if settings changed
+            local needs_recreate=false
+            local want_mc=$(get_container_max_clients $i)
+            local want_bw=$(get_container_bandwidth $i)
+            local want_cpus=$(get_container_cpus $i)
+            local want_mem=$(get_container_memory $i)
+            local cur_args=$(docker inspect --format '{{join .Args " "}}' "$name" 2>/dev/null)
+            local cur_mc=$(echo "$cur_args" | sed -n 's/.*--max-clients \([^ ]*\).*/\1/p' 2>/dev/null)
+            local cur_bw=$(echo "$cur_args" | sed -n 's/.*--bandwidth \([^ ]*\).*/\1/p' 2>/dev/null)
+            local cur_nano=$(docker inspect --format '{{.HostConfig.NanoCpus}}' "$name" 2>/dev/null || echo 0)
+            local cur_memb=$(docker inspect --format '{{.HostConfig.Memory}}' "$name" 2>/dev/null || echo 0)
+            local want_nano=0
+            [ -n "$want_cpus" ] && want_nano=$(awk -v c="$want_cpus" 'BEGIN{printf "%.0f", c*1000000000}')
+            local want_memb=0
+            if [ -n "$want_mem" ]; then
+                local mv=${want_mem%[mMgG]}; local mu=${want_mem: -1}
+                [[ "$mu" =~ [gG] ]] && want_memb=$((mv * 1073741824)) || want_memb=$((mv * 1048576))
             fi
-            echo "Recreating ${name}..."
-            docker rm "$name" 2>/dev/null || true
-        fi
+            [ "$cur_mc" != "$want_mc" ] && needs_recreate=true
+            [ "$cur_bw" != "$want_bw" ] && needs_recreate=true
+            [ "${cur_nano:-0}" != "$want_nano" ] && needs_recreate=true
+            [ "${cur_memb:-0}" != "$want_memb" ] && needs_recreate=true
 
-        docker volume create "$vol" 2>/dev/null || true
-        fix_volume_permissions $i
-        run_conduit_container $i
+            if [ "$needs_recreate" = true ]; then
+                echo "Settings changed for ${name}, recreating..."
+                docker rm -f "$name" 2>/dev/null || true
+                docker volume create "$vol" 2>/dev/null || true
+                fix_volume_permissions $i
+                run_conduit_container $i
+            else
+                # Settings unchanged — just resume the stopped container
+                docker start "$name" 2>/dev/null
+            fi
+        else
+            # Container doesn't exist — create fresh
+            docker volume create "$vol" 2>/dev/null || true
+            fix_volume_permissions $i
+            run_conduit_container $i
+        fi
 
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}✓ ${name} started${NC}"
@@ -3393,11 +4115,18 @@ start_conduit() {
     done
     # Start background tracker
     setup_tracker_service 2>/dev/null || true
+    # Start snowflake if enabled
+    [ "$SNOWFLAKE_ENABLED" = "true" ] && start_snowflake 2>/dev/null
     return 0
 }
 
 stop_conduit() {
+    local _auto="${1:-}"
     echo "Stopping Conduit..."
+    # Mark as user-stopped (skip for systemd shutdown)
+    if [ "$_auto" != "--auto" ]; then
+        touch "$INSTALL_DIR/.user_stopped"
+    fi
     local stopped=0
     for i in $(seq 1 $CONTAINER_COUNT); do
         local name=$(get_container_name $i)
@@ -3407,8 +4136,7 @@ stop_conduit() {
             stopped=$((stopped + 1))
         fi
     done
-    # Also stop/remove any extra Conduit containers beyond current count (from previous scaling)
-    # This avoids hardcoding a max (previously 5) by discovering matching containers dynamically.
+    # Stop extra containers from previous scaling
     local base_name="$(get_container_name 1)"
     local idx
     docker ps -a --format '{{.Names}}' 2>/dev/null | while read -r cname; do
@@ -3424,21 +4152,35 @@ stop_conduit() {
         esac
     done
     [ "$stopped" -eq 0 ] && echo -e "${YELLOW}No Conduit containers are running${NC}"
-    # Stop background tracker
+    [ "$SNOWFLAKE_ENABLED" = "true" ] && stop_snowflake 2>/dev/null
     stop_tracker_service 2>/dev/null || true
     return 0
 }
 
 restart_conduit() {
-    # Check data cap before restarting
-    if [ "$DATA_CAP_GB" -gt 0 ] 2>/dev/null; then
+    rm -f "$INSTALL_DIR/.user_stopped"
+    if _has_any_data_cap; then
         local usage=$(get_data_usage)
         local used_rx=$(echo "$usage" | awk '{print $1}')
         local used_tx=$(echo "$usage" | awk '{print $2}')
-        local total_used=$((used_rx + used_tx + ${DATA_CAP_PRIOR_USAGE:-0}))
-        local cap_bytes=$(awk -v gb="$DATA_CAP_GB" 'BEGIN{printf "%.0f", gb * 1073741824}')
-        if [ "$total_used" -ge "$cap_bytes" ] 2>/dev/null; then
-            echo -e "${RED}⚠ Data cap exceeded ($(format_gb $total_used) / ${DATA_CAP_GB} GB). Containers will not restart.${NC}"
+        local total_rx=$((used_rx + ${DATA_CAP_PRIOR_RX:-0}))
+        local total_tx=$((used_tx + ${DATA_CAP_PRIOR_TX:-0}))
+        local total_used=$((total_rx + total_tx))
+        local cap_hit=""
+        if [ "${DATA_CAP_UP_GB:-0}" -gt 0 ] 2>/dev/null; then
+            local up_cap=$(awk -v gb="$DATA_CAP_UP_GB" 'BEGIN{printf "%.0f", gb * 1073741824}')
+            [ "$total_tx" -ge "$up_cap" ] 2>/dev/null && cap_hit="Upload cap exceeded ($(format_gb $total_tx) / ${DATA_CAP_UP_GB} GB)"
+        fi
+        if [ -z "$cap_hit" ] && [ "${DATA_CAP_DOWN_GB:-0}" -gt 0 ] 2>/dev/null; then
+            local down_cap=$(awk -v gb="$DATA_CAP_DOWN_GB" 'BEGIN{printf "%.0f", gb * 1073741824}')
+            [ "$total_rx" -ge "$down_cap" ] 2>/dev/null && cap_hit="Download cap exceeded ($(format_gb $total_rx) / ${DATA_CAP_DOWN_GB} GB)"
+        fi
+        if [ -z "$cap_hit" ] && [ "${DATA_CAP_GB:-0}" -gt 0 ] 2>/dev/null; then
+            local total_cap=$(awk -v gb="$DATA_CAP_GB" 'BEGIN{printf "%.0f", gb * 1073741824}')
+            [ "$total_used" -ge "$total_cap" ] 2>/dev/null && cap_hit="Total cap exceeded ($(format_gb $total_used) / ${DATA_CAP_GB} GB)"
+        fi
+        if [ -n "$cap_hit" ]; then
+            echo -e "${RED}⚠ ${cap_hit}. Containers will not restart.${NC}"
             echo -e "${YELLOW}Reset or increase the data cap from the menu to restart containers.${NC}"
             return 1
         fi
@@ -3556,6 +4298,8 @@ restart_conduit() {
     fi
     # Regenerate tracker script and ensure service is running
     setup_tracker_service 2>/dev/null || true
+    # Restart snowflake if enabled
+    [ "$SNOWFLAKE_ENABLED" = "true" ] && restart_snowflake 2>/dev/null
 }
 
 change_settings() {
@@ -4104,7 +4848,6 @@ manage_containers() {
             local status_text status_color
             local c_clients="-" c_up="-" c_down="-" c_cpu="-" c_ram="-"
 
-            if [ "$ci" -le "$CONTAINER_COUNT" ]; then
                 if echo "$docker_ps_cache" | grep -q "^${cname}$"; then
                     status_text="Running"
                     status_color="${GREEN}"
@@ -4146,10 +4889,6 @@ manage_containers() {
                     status_text="Stopped"
                     status_color="${RED}"
                 fi
-            else
-                status_text="--"
-                status_color="${YELLOW}"
-            fi
             printf "  %-2s %-11s %b%-8s%b %-7s %-8s %-8s %-6s %-7s${EL}\n" \
                 "$ci" "$cname" "$status_color" "$status_text" "${NC}" "$c_clients" "$c_up" "$c_down" "$c_cpu" "$c_ram"
         done
@@ -4532,7 +5271,7 @@ manage_containers() {
             q)
                 show_qr_code
                 ;;
-            b|"")
+            b)
                 stop_manage=1
                 ;;
             *)
@@ -4564,8 +5303,7 @@ get_data_usage() {
     local tx=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
     local used_rx=$((rx - DATA_CAP_BASELINE_RX))
     local used_tx=$((tx - DATA_CAP_BASELINE_TX))
-    # Handle counter reset (reboot) - re-baseline to current counters
-    # Prior usage is preserved in DATA_CAP_PRIOR_USAGE via check_data_cap
+    # Handle counter reset (reboot)
     if [ "$used_rx" -lt 0 ] || [ "$used_tx" -lt 0 ]; then
         DATA_CAP_BASELINE_RX=$rx
         DATA_CAP_BASELINE_TX=$tx
@@ -4576,37 +5314,52 @@ get_data_usage() {
     echo "$used_rx $used_tx"
 }
 
-# Check data cap and stop containers if exceeded
-# Returns 1 if cap exceeded, 0 if OK or no cap set
 DATA_CAP_EXCEEDED=false
 _DATA_CAP_LAST_SAVED=0
+_has_any_data_cap() {
+    { [ "${DATA_CAP_GB:-0}" -gt 0 ] || [ "${DATA_CAP_UP_GB:-0}" -gt 0 ] || [ "${DATA_CAP_DOWN_GB:-0}" -gt 0 ]; } 2>/dev/null
+}
 check_data_cap() {
-    [ "$DATA_CAP_GB" -eq 0 ] 2>/dev/null && return 0
-    # Validate DATA_CAP_GB is numeric
-    if ! [[ "$DATA_CAP_GB" =~ ^[0-9]+$ ]]; then
-        return 0  # invalid cap value, treat as no cap
-    fi
+    _has_any_data_cap || return 0
     local usage=$(get_data_usage)
     local used_rx=$(echo "$usage" | awk '{print $1}')
     local used_tx=$(echo "$usage" | awk '{print $2}')
-    local session_used=$((used_rx + used_tx))
-    local total_used=$((session_used + ${DATA_CAP_PRIOR_USAGE:-0}))
-    # Periodically persist usage so it survives reboots (save every ~100MB change)
+    local total_rx=$((used_rx + ${DATA_CAP_PRIOR_RX:-0}))
+    local total_tx=$((used_tx + ${DATA_CAP_PRIOR_TX:-0}))
+    local total_used=$((total_rx + total_tx))
+    # Persist usage periodically (survives reboots)
     local save_threshold=104857600
     local diff=$((total_used - _DATA_CAP_LAST_SAVED))
     [ "$diff" -lt 0 ] && diff=$((-diff))
     if [ "$diff" -ge "$save_threshold" ]; then
+        DATA_CAP_PRIOR_RX=$total_rx
+        DATA_CAP_PRIOR_TX=$total_tx
         DATA_CAP_PRIOR_USAGE=$total_used
         DATA_CAP_BASELINE_RX=$(cat /sys/class/net/${DATA_CAP_IFACE:-$(get_default_iface)}/statistics/rx_bytes 2>/dev/null || echo 0)
         DATA_CAP_BASELINE_TX=$(cat /sys/class/net/${DATA_CAP_IFACE:-$(get_default_iface)}/statistics/tx_bytes 2>/dev/null || echo 0)
         save_settings
         _DATA_CAP_LAST_SAVED=$total_used
     fi
-    local cap_bytes=$(awk -v gb="$DATA_CAP_GB" 'BEGIN{printf "%.0f", gb * 1073741824}')
-    if [ "$total_used" -ge "$cap_bytes" ] 2>/dev/null; then
+    # Check each cap independently
+    local exceeded=false
+    if [ "${DATA_CAP_UP_GB:-0}" -gt 0 ] 2>/dev/null; then
+        local up_cap=$(awk -v gb="$DATA_CAP_UP_GB" 'BEGIN{printf "%.0f", gb * 1073741824}')
+        [ "$total_tx" -ge "$up_cap" ] 2>/dev/null && exceeded=true
+    fi
+    if [ "${DATA_CAP_DOWN_GB:-0}" -gt 0 ] 2>/dev/null; then
+        local down_cap=$(awk -v gb="$DATA_CAP_DOWN_GB" 'BEGIN{printf "%.0f", gb * 1073741824}')
+        [ "$total_rx" -ge "$down_cap" ] 2>/dev/null && exceeded=true
+    fi
+    if [ "${DATA_CAP_GB:-0}" -gt 0 ] 2>/dev/null; then
+        local total_cap=$(awk -v gb="$DATA_CAP_GB" 'BEGIN{printf "%.0f", gb * 1073741824}')
+        [ "$total_used" -ge "$total_cap" ] 2>/dev/null && exceeded=true
+    fi
+    if [ "$exceeded" = true ]; then
         # Only stop containers once when cap is first exceeded
         if [ "$DATA_CAP_EXCEEDED" = false ]; then
             DATA_CAP_EXCEEDED=true
+            DATA_CAP_PRIOR_RX=$total_rx
+            DATA_CAP_PRIOR_TX=$total_tx
             DATA_CAP_PRIOR_USAGE=$total_used
             DATA_CAP_BASELINE_RX=$(cat /sys/class/net/${DATA_CAP_IFACE:-$(get_default_iface)}/statistics/rx_bytes 2>/dev/null || echo 0)
             DATA_CAP_BASELINE_TX=$(cat /sys/class/net/${DATA_CAP_IFACE:-$(get_default_iface)}/statistics/tx_bytes 2>/dev/null || echo 0)
@@ -4618,6 +5371,7 @@ check_data_cap() {
                 local name=$(get_container_name $i)
                 docker stop "$name" 2>/dev/null || true
             done
+            [ "$SNOWFLAKE_ENABLED" = "true" ] && stop_snowflake 2>/dev/null
         fi
         return 1  # cap exceeded
     else
@@ -4627,69 +5381,124 @@ check_data_cap() {
     return 0
 }
 
-# Format bytes to GB with 2 decimal places
+# Format bytes to GB/TB with 2 decimal places
 format_gb() {
-    awk -v b="$1" 'BEGIN{printf "%.2f", b / 1073741824}'
+    awk -v b="$1" 'BEGIN{if(b>=1099511627776) printf "%.2f TB", b/1099511627776; else printf "%.2f GB", b/1073741824}'
 }
 
 set_data_cap() {
-    local iface=$(get_default_iface)
+    local iface cap_choice new_cap
+    iface=$(get_default_iface)
     echo ""
     echo -e "${CYAN}═══ DATA USAGE CAP ═══${NC}"
-    if [ "$DATA_CAP_GB" -gt 0 ] 2>/dev/null; then
+    if _has_any_data_cap; then
         local usage=$(get_data_usage)
         local used_rx=$(echo "$usage" | awk '{print $1}')
         local used_tx=$(echo "$usage" | awk '{print $2}')
-        local total_used=$((used_rx + used_tx))
-        echo -e "  Current cap:   ${GREEN}${DATA_CAP_GB} GB${NC}"
-        echo -e "  Used:          $(format_gb $total_used) GB"
+        local total_rx=$((used_rx + ${DATA_CAP_PRIOR_RX:-0}))
+        local total_tx=$((used_tx + ${DATA_CAP_PRIOR_TX:-0}))
+        local total_used=$((total_rx + total_tx))
+        [ "${DATA_CAP_UP_GB:-0}" -gt 0 ] 2>/dev/null && \
+            echo -e "  Upload cap:    $(format_gb $total_tx) / ${GREEN}${DATA_CAP_UP_GB} GB${NC}"
+        [ "${DATA_CAP_DOWN_GB:-0}" -gt 0 ] 2>/dev/null && \
+            echo -e "  Download cap:  $(format_gb $total_rx) / ${GREEN}${DATA_CAP_DOWN_GB} GB${NC}"
+        [ "${DATA_CAP_GB:-0}" -gt 0 ] 2>/dev/null && \
+            echo -e "  Total cap:     $(format_gb $total_used) / ${GREEN}${DATA_CAP_GB} GB${NC}"
         echo -e "  Interface:     ${DATA_CAP_IFACE:-$iface}"
     else
-        echo -e "  Current cap:   ${YELLOW}None${NC}"
+        echo -e "  Caps:          ${YELLOW}None configured${NC}"
         echo -e "  Interface:     $iface"
     fi
     echo ""
     echo "  Options:"
-    echo "    1. Set new data cap"
-    echo "    2. Reset usage counter"
-    echo "    3. Remove cap"
-    echo "    4. Back"
+    echo "    1. Set upload cap"
+    echo "    2. Set download cap"
+    echo "    3. Set total cap"
+    echo "    4. Reset usage counters"
+    echo "    5. Remove all caps"
+    echo "    6. Back"
     echo ""
     read -p "  Choice: " cap_choice < /dev/tty || true
 
     case "$cap_choice" in
         1)
-            read -p "  Enter cap in GB (e.g. 50): " new_cap < /dev/tty || true
-            if [[ "$new_cap" =~ ^[0-9]+$ ]] && [ "$new_cap" -gt 0 ]; then
-                DATA_CAP_GB=$new_cap
+            echo -e "  Current: ${DATA_CAP_UP_GB:-0} GB (0 = disabled)"
+            read -p "  Upload cap in GB: " new_cap < /dev/tty || true
+            if [[ "$new_cap" =~ ^[0-9]+$ ]]; then
+                DATA_CAP_UP_GB=$new_cap
                 DATA_CAP_IFACE=$iface
-                DATA_CAP_PRIOR_USAGE=0
-                # Snapshot current bytes as baseline
-                DATA_CAP_BASELINE_RX=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
-                DATA_CAP_BASELINE_TX=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
+                if [ "$new_cap" -gt 0 ] && [ "${DATA_CAP_PRIOR_RX:-0}" -eq 0 ] && [ "${DATA_CAP_PRIOR_TX:-0}" -eq 0 ] && [ "${DATA_CAP_PRIOR_USAGE:-0}" -eq 0 ]; then
+                    DATA_CAP_BASELINE_RX=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
+                    DATA_CAP_BASELINE_TX=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
+                    DATA_CAP_PRIOR_USAGE=0; DATA_CAP_PRIOR_RX=0; DATA_CAP_PRIOR_TX=0
+                fi
                 save_settings
-                echo -e "  ${GREEN}✓ Data cap set to ${new_cap} GB on ${iface}${NC}"
+                [ "$new_cap" -eq 0 ] && echo -e "  ${GREEN}✓ Upload cap disabled${NC}" || echo -e "  ${GREEN}✓ Upload cap set to ${new_cap} GB${NC}"
             else
-                echo -e "  ${RED}Invalid value.${NC}"
+                echo -e "  ${RED}Invalid value. Use a number (0 to disable).${NC}"
             fi
             ;;
         2)
-            DATA_CAP_PRIOR_USAGE=0
-            DATA_CAP_BASELINE_RX=$(cat /sys/class/net/${DATA_CAP_IFACE:-$iface}/statistics/rx_bytes 2>/dev/null || echo 0)
-            DATA_CAP_BASELINE_TX=$(cat /sys/class/net/${DATA_CAP_IFACE:-$iface}/statistics/tx_bytes 2>/dev/null || echo 0)
-            save_settings
-            echo -e "  ${GREEN}✓ Usage counter reset${NC}"
+            echo -e "  Current: ${DATA_CAP_DOWN_GB:-0} GB (0 = disabled)"
+            read -p "  Download cap in GB: " new_cap < /dev/tty || true
+            if [[ "$new_cap" =~ ^[0-9]+$ ]]; then
+                DATA_CAP_DOWN_GB=$new_cap
+                DATA_CAP_IFACE=$iface
+                if [ "$new_cap" -gt 0 ] && [ "${DATA_CAP_PRIOR_RX:-0}" -eq 0 ] && [ "${DATA_CAP_PRIOR_TX:-0}" -eq 0 ] && [ "${DATA_CAP_PRIOR_USAGE:-0}" -eq 0 ]; then
+                    DATA_CAP_BASELINE_RX=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
+                    DATA_CAP_BASELINE_TX=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
+                    DATA_CAP_PRIOR_USAGE=0; DATA_CAP_PRIOR_RX=0; DATA_CAP_PRIOR_TX=0
+                fi
+                save_settings
+                [ "$new_cap" -eq 0 ] && echo -e "  ${GREEN}✓ Download cap disabled${NC}" || echo -e "  ${GREEN}✓ Download cap set to ${new_cap} GB${NC}"
+            else
+                echo -e "  ${RED}Invalid value. Use a number (0 to disable).${NC}"
+            fi
             ;;
         3)
+            echo -e "  Current: ${DATA_CAP_GB:-0} GB (0 = disabled)"
+            read -p "  Total cap in GB: " new_cap < /dev/tty || true
+            if [[ "$new_cap" =~ ^[0-9]+$ ]]; then
+                DATA_CAP_GB=$new_cap
+                DATA_CAP_IFACE=$iface
+                if [ "$new_cap" -gt 0 ] && [ "${DATA_CAP_PRIOR_RX:-0}" -eq 0 ] && [ "${DATA_CAP_PRIOR_TX:-0}" -eq 0 ] && [ "${DATA_CAP_PRIOR_USAGE:-0}" -eq 0 ]; then
+                    DATA_CAP_BASELINE_RX=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
+                    DATA_CAP_BASELINE_TX=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
+                    DATA_CAP_PRIOR_USAGE=0; DATA_CAP_PRIOR_RX=0; DATA_CAP_PRIOR_TX=0
+                fi
+                save_settings
+                [ "$new_cap" -eq 0 ] && echo -e "  ${GREEN}✓ Total cap disabled${NC}" || echo -e "  ${GREEN}✓ Total cap set to ${new_cap} GB${NC}"
+            else
+                echo -e "  ${RED}Invalid value. Use a number (0 to disable).${NC}"
+            fi
+            ;;
+        4)
+            DATA_CAP_PRIOR_USAGE=0
+            DATA_CAP_PRIOR_RX=0
+            DATA_CAP_PRIOR_TX=0
+            DATA_CAP_BASELINE_RX=$(cat /sys/class/net/${DATA_CAP_IFACE:-$iface}/statistics/rx_bytes 2>/dev/null || echo 0)
+            DATA_CAP_BASELINE_TX=$(cat /sys/class/net/${DATA_CAP_IFACE:-$iface}/statistics/tx_bytes 2>/dev/null || echo 0)
+            DATA_CAP_EXCEEDED=false
+            rm -f "$PERSIST_DIR/data_cap_exceeded" 2>/dev/null
+            save_settings
+            echo -e "  ${GREEN}✓ Usage counters reset${NC}"
+            ;;
+        5)
             DATA_CAP_GB=0
+            DATA_CAP_UP_GB=0
+            DATA_CAP_DOWN_GB=0
             DATA_CAP_BASELINE_RX=0
             DATA_CAP_BASELINE_TX=0
             DATA_CAP_PRIOR_USAGE=0
+            DATA_CAP_PRIOR_RX=0
+            DATA_CAP_PRIOR_TX=0
             DATA_CAP_IFACE=""
+            DATA_CAP_EXCEEDED=false
+            rm -f "$PERSIST_DIR/data_cap_exceeded" 2>/dev/null
             save_settings
-            echo -e "  ${GREEN}✓ Data cap removed${NC}"
+            echo -e "  ${GREEN}✓ All data caps removed${NC}"
             ;;
-        4|"")
+        6|"")
             return
             ;;
     esac
@@ -4703,10 +5512,14 @@ MAX_CLIENTS=$MAX_CLIENTS
 BANDWIDTH=$BANDWIDTH
 CONTAINER_COUNT=$CONTAINER_COUNT
 DATA_CAP_GB=$DATA_CAP_GB
+DATA_CAP_UP_GB=$DATA_CAP_UP_GB
+DATA_CAP_DOWN_GB=$DATA_CAP_DOWN_GB
 DATA_CAP_IFACE=$DATA_CAP_IFACE
 DATA_CAP_BASELINE_RX=$DATA_CAP_BASELINE_RX
 DATA_CAP_BASELINE_TX=$DATA_CAP_BASELINE_TX
 DATA_CAP_PRIOR_USAGE=${DATA_CAP_PRIOR_USAGE:-0}
+DATA_CAP_PRIOR_RX=${DATA_CAP_PRIOR_RX:-0}
+DATA_CAP_PRIOR_TX=${DATA_CAP_PRIOR_TX:-0}
 TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN"
 TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID"
 TELEGRAM_INTERVAL=${TELEGRAM_INTERVAL:-6}
@@ -4719,6 +5532,10 @@ TELEGRAM_START_HOUR=${TELEGRAM_START_HOUR:-0}
 DOCKER_CPUS=${DOCKER_CPUS:-}
 DOCKER_MEMORY=${DOCKER_MEMORY:-}
 TRACKER_ENABLED=${TRACKER_ENABLED:-true}
+SNOWFLAKE_ENABLED=${SNOWFLAKE_ENABLED:-false}
+SNOWFLAKE_COUNT=${SNOWFLAKE_COUNT:-1}
+SNOWFLAKE_CPUS=${SNOWFLAKE_CPUS:-}
+SNOWFLAKE_MEMORY=${SNOWFLAKE_MEMORY:-}
 EOF
     # Save per-container overrides
     for i in $(seq 1 "$CONTAINER_COUNT"); do
@@ -4814,10 +5631,7 @@ telegram_get_chat_id() {
     local response
     response=$(curl -s --max-time 10 --max-filesize 1048576 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates" 2>/dev/null)
     [ -z "$response" ] && return 1
-    # Verify API returned success
     echo "$response" | grep -q '"ok":true' || return 1
-    # Extract chat id: find "message"..."chat":{"id":NUMBER pattern
-    # Use python if available for reliable JSON parsing, fall back to grep
     local chat_id=""
     if command -v python3 &>/dev/null; then
         chat_id=$(python3 -c "
@@ -4852,7 +5666,6 @@ telegram_build_report() {
     report+=$'\n'
     report+=$'\n'
 
-    # Container status & uptime (check all containers, use earliest start)
     local running_count=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c "^conduit" 2>/dev/null || true)
     running_count=${running_count:-0}
     local total=$CONTAINER_COUNT
@@ -4885,7 +5698,6 @@ telegram_build_report() {
     report+="📦 Containers: ${running_count}/${total} running"
     report+=$'\n'
 
-    # Uptime percentage + streak
     local uptime_log="$INSTALL_DIR/traffic_stats/uptime_log"
     if [ -s "$uptime_log" ]; then
         local cutoff_24h=$(( $(date +%s) - 86400 ))
@@ -4947,17 +5759,48 @@ telegram_build_report() {
     report+=$'\n'
 
     # Data usage
-    if [ "${DATA_CAP_GB:-0}" -gt 0 ] 2>/dev/null; then
+    if _has_any_data_cap; then
         local usage=$(get_data_usage 2>/dev/null)
         local used_rx=$(echo "$usage" | awk '{print $1}')
         local used_tx=$(echo "$usage" | awk '{print $2}')
-        local total_used=$(( ${used_rx:-0} + ${used_tx:-0} + ${DATA_CAP_PRIOR_USAGE:-0} ))
-        local used_gb=$(awk "BEGIN {printf \"%.2f\", $total_used/1073741824}" 2>/dev/null || echo "0")
-        report+="📈 Data: ${used_gb} GB / ${DATA_CAP_GB} GB"
+        local total_rx=$(( ${used_rx:-0} + ${DATA_CAP_PRIOR_RX:-0} ))
+        local total_tx=$(( ${used_tx:-0} + ${DATA_CAP_PRIOR_TX:-0} ))
+        local total_used=$(( total_rx + total_tx ))
+        local cap_parts=""
+        if [ "${DATA_CAP_UP_GB:-0}" -gt 0 ] 2>/dev/null; then
+            local up_gb=$(awk "BEGIN {printf \"%.2f\", $total_tx/1073741824}" 2>/dev/null || echo "0")
+            cap_parts+="up ${up_gb}/${DATA_CAP_UP_GB}GB"
+        fi
+        if [ "${DATA_CAP_DOWN_GB:-0}" -gt 0 ] 2>/dev/null; then
+            [ -n "$cap_parts" ] && cap_parts+=" "
+            local dn_gb=$(awk "BEGIN {printf \"%.2f\", $total_rx/1073741824}" 2>/dev/null || echo "0")
+            cap_parts+="dn ${dn_gb}/${DATA_CAP_DOWN_GB}GB"
+        fi
+        if [ "${DATA_CAP_GB:-0}" -gt 0 ] 2>/dev/null; then
+            [ -n "$cap_parts" ] && cap_parts+=" "
+            local tot_gb=$(awk "BEGIN {printf \"%.2f\", $total_used/1073741824}" 2>/dev/null || echo "0")
+            cap_parts+="total ${tot_gb}/${DATA_CAP_GB}GB"
+        fi
+        report+="📈 Data: ${cap_parts}"
         report+=$'\n'
     fi
 
-    # Container restart counts
+    if [ "$SNOWFLAKE_ENABLED" = "true" ] && is_snowflake_running; then
+        local sf_stats sf_conn sf_in sf_out sf_to
+        sf_stats=$(get_snowflake_stats 2>/dev/null)
+        sf_conn=$(echo "$sf_stats" | awk '{print $1}')
+        sf_in=$(echo "$sf_stats" | awk '{print $2}')
+        sf_out=$(echo "$sf_stats" | awk '{print $3}')
+        sf_to=$(echo "$sf_stats" | awk '{print $4}')
+        sf_conn=${sf_conn:-0}
+        local sf_in_fmt=$(format_bytes "${sf_in:-0}")
+        local sf_out_fmt=$(format_bytes "${sf_out:-0}")
+        local sf_to_label=""
+        [ "${sf_to:-0}" -gt 0 ] 2>/dev/null && sf_to_label=" (${sf_to} to)"
+        report+="❄ Snowflake: ${sf_conn} conn${sf_to_label} | ↓${sf_in_fmt} ↑${sf_out_fmt}"
+        report+=$'\n'
+    fi
+
     local total_restarts=0
     local restart_details=""
     for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
@@ -4972,7 +5815,6 @@ telegram_build_report() {
         report+=$'\n'
     fi
 
-    # Top countries by connected peers (from tracker snapshot)
     local snap_file_peers="$INSTALL_DIR/traffic_stats/tracker_snapshot"
     if [ -s "$snap_file_peers" ]; then
         local top_peers
@@ -4989,7 +5831,6 @@ telegram_build_report() {
         fi
     fi
 
-    # Top countries from cumulative_data (field 3 = upload bytes, matching dashboard)
     local data_file="$INSTALL_DIR/traffic_stats/cumulative_data"
     if [ -s "$data_file" ]; then
         local top_countries
@@ -5066,6 +5907,49 @@ telegram_send() {
         --data-urlencode "parse_mode=Markdown" >/dev/null 2>&1
 }
 
+telegram_send_inline_keyboard() {
+    local text="$1"
+    local keyboard_json="$2"
+    local label="${TELEGRAM_SERVER_LABEL:-$(hostname 2>/dev/null || echo 'unknown')}"
+    label=$(escape_md "$label")
+    if [ -n "$_server_ip" ]; then
+        text="[${label} | ${_server_ip}] ${text}"
+    else
+        text="[${label}] ${text}"
+    fi
+    curl -s --max-time 10 --max-filesize 1048576 -X POST \
+        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+        --data-urlencode "text=$text" \
+        --data-urlencode "parse_mode=Markdown" \
+        --data-urlencode "reply_markup=$keyboard_json" >/dev/null 2>&1
+}
+
+telegram_send_photo() {
+    local photo_path="$1"
+    local caption="$2"
+    local label="${TELEGRAM_SERVER_LABEL:-$(hostname 2>/dev/null || echo 'unknown')}"
+    if [ -n "$_server_ip" ]; then
+        caption="[${label} | ${_server_ip}] ${caption}"
+    else
+        caption="[${label}] ${caption}"
+    fi
+    curl -s --max-time 30 -X POST \
+        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+        -F "chat_id=$TELEGRAM_CHAT_ID" \
+        -F "photo=@${photo_path}" \
+        -F "caption=$caption" >/dev/null 2>&1
+}
+
+telegram_answer_callback() {
+    local callback_id="$1"
+    local answer_text="${2:-}"
+    curl -s --max-time 5 -X POST \
+        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery" \
+        --data-urlencode "callback_query_id=$callback_id" \
+        --data-urlencode "text=$answer_text" >/dev/null 2>&1
+}
+
 escape_md() {
     local text="$1"
     text="${text//\\/\\\\}"
@@ -5083,6 +5967,55 @@ get_container_name() {
         echo "conduit"
     else
         echo "conduit-${i}"
+    fi
+}
+
+get_volume_name() {
+    local idx=${1:-1}
+    if [ "$idx" -eq 1 ]; then
+        echo "conduit-data"
+    else
+        echo "conduit-data-${idx}"
+    fi
+}
+
+get_node_id() {
+    local vol="${1:-conduit-data}"
+    if docker volume inspect "$vol" >/dev/null 2>&1; then
+        local mountpoint=$(docker volume inspect "$vol" --format '{{ .Mountpoint }}' 2>/dev/null)
+        local key_json=""
+        if [ -n "$mountpoint" ] && [ -f "$mountpoint/conduit_key.json" ]; then
+            key_json=$(cat "$mountpoint/conduit_key.json" 2>/dev/null)
+        else
+            local tmp_ctr="conduit-nodeid-tmp"
+            docker rm -f "$tmp_ctr" 2>/dev/null || true
+            docker create --name "$tmp_ctr" -v "$vol":/data alpine true 2>/dev/null || true
+            key_json=$(docker cp "$tmp_ctr:/data/conduit_key.json" - 2>/dev/null | tar -xO 2>/dev/null)
+            docker rm -f "$tmp_ctr" 2>/dev/null || true
+        fi
+        if [ -n "$key_json" ]; then
+            echo "$key_json" | grep "privateKeyBase64" | awk -F'"' '{print $4}' | base64 -d 2>/dev/null | tail -c 32 | base64 | tr -d '=\n'
+        fi
+    fi
+}
+
+get_raw_key() {
+    local vol="${1:-conduit-data}"
+    if docker volume inspect "$vol" >/dev/null 2>&1; then
+        local mountpoint=$(docker volume inspect "$vol" --format '{{ .Mountpoint }}' 2>/dev/null)
+        local key_json=""
+        if [ -n "$mountpoint" ] && [ -f "$mountpoint/conduit_key.json" ]; then
+            key_json=$(cat "$mountpoint/conduit_key.json" 2>/dev/null)
+        else
+            local tmp_ctr="conduit-rawkey-tmp"
+            docker rm -f "$tmp_ctr" 2>/dev/null || true
+            docker create --name "$tmp_ctr" -v "$vol":/data alpine true 2>/dev/null || true
+            key_json=$(docker cp "$tmp_ctr:/data/conduit_key.json" - 2>/dev/null | tar -xO 2>/dev/null)
+            docker rm -f "$tmp_ctr" 2>/dev/null || true
+        fi
+        if [ -n "$key_json" ]; then
+            echo "$key_json" | grep "privateKeyBase64" | awk -F'"' '{print $4}'
+        fi
     fi
 }
 
@@ -5127,7 +6060,7 @@ track_uptime() {
     local running=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c "^conduit" 2>/dev/null || true)
     running=${running:-0}
     echo "$(date +%s)|${running}" >> "$INSTALL_DIR/traffic_stats/uptime_log"
-    # Trim to 10080 lines (7 days of per-minute entries)
+    # Trim to 7 days
     local log_file="$INSTALL_DIR/traffic_stats/uptime_log"
     local lines=$(wc -l < "$log_file" 2>/dev/null || echo 0)
     if [ "$lines" -gt 10080 ] 2>/dev/null; then
@@ -5186,7 +6119,8 @@ check_alerts() {
     local conduit_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "^conduit" 2>/dev/null || true)
     local stats_line=""
     if [ -n "$conduit_containers" ]; then
-        stats_line=$(timeout 10 docker stats --no-stream --format "{{.CPUPerc}} {{.MemPerc}}" $conduit_containers 2>/dev/null | head -1)
+        stats_line=$(timeout 10 docker stats --no-stream --format "{{.CPUPerc}} {{.MemPerc}}" $conduit_containers 2>/dev/null | \
+            awk '{gsub(/%/,""); cpu+=$1; if($2+0>ram) ram=$2} END{printf "%.2f%% %.2f%%", cpu, ram}')
     fi
     local raw_cpu=$(echo "$stats_line" | awk '{print $1}')
     local ram_pct=$(echo "$stats_line" | awk '{print $2}')
@@ -5348,8 +6282,8 @@ process_commands() {
     local offset=$_CMD_OFFSET
 
     local response
-    response=$(curl -s --max-time 10 --max-filesize 1048576 \
-        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=$((offset + 1))&timeout=0" 2>/dev/null)
+    response=$(curl -s --max-time 15 --max-filesize 1048576 \
+        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=$((offset + 1))&timeout=5" 2>/dev/null)
     [ -z "$response" ] && return
 
     # Parse with python3 if available, otherwise skip
@@ -5367,15 +6301,30 @@ try:
     if not results: sys.exit(0)
     for r in results:
         uid = r.get('update_id', 0)
+        # Handle regular messages
         msg = r.get('message', {})
-        chat_id = msg.get('chat', {}).get('id', 0)
-        text = msg.get('text', '')
-        if str(chat_id) == '$TELEGRAM_CHAT_ID' and text.startswith('/'):
-            print(f'{uid}|{text}')
-        else:
-            print(f'{uid}|')
+        if msg:
+            chat_id = msg.get('chat', {}).get('id', 0)
+            text = msg.get('text', '')
+            if str(chat_id) == '$TELEGRAM_CHAT_ID' and text.startswith('/'):
+                safe_text = text.split('|')[0].strip()
+                print(f'{uid}|{safe_text}')
+            else:
+                print(f'{uid}|')
+            continue
+        # Handle callback queries (inline keyboard button presses)
+        cbq = r.get('callback_query', {})
+        if cbq:
+            cb_chat_id = cbq.get('message', {}).get('chat', {}).get('id', 0)
+            cb_id = cbq.get('id', '').replace('|', '')
+            cb_data = cbq.get('data', '').split('|')[0].strip()
+            if str(cb_chat_id) == '$TELEGRAM_CHAT_ID' and cb_data:
+                print(f'{uid}|callback|{cb_id}|{cb_data}')
+            else:
+                print(f'{uid}|')
+            continue
+        print(f'{uid}|')
 except Exception:
-    # On parse failure, try to extract max update_id to avoid re-fetching
     try:
         data = json.loads(sys.argv[1])
         results = data.get('result', [])
@@ -5390,9 +6339,52 @@ except Exception:
     [ -z "$parsed" ] && return
 
     local max_id=$offset
-    while IFS='|' read -r uid cmd; do
+    while IFS='|' read -r uid field2 field3 field4; do
         [ -z "$uid" ] && continue
         [ "$uid" -gt "$max_id" ] 2>/dev/null && max_id=$uid
+
+        # Handle callback queries (inline keyboard button presses)
+        if [ "$field2" = "callback" ]; then
+            local cb_id="$field3"
+            local cb_data="$field4"
+            case "$cb_data" in
+                qr_*)
+                    local qr_num="${cb_data#qr_}"
+                    telegram_answer_callback "$cb_id" "Generating QR for container ${qr_num}..."
+                    if [[ "$qr_num" =~ ^[0-9]+$ ]] && [ "$qr_num" -ge 1 ] && [ "$qr_num" -le "${CONTAINER_COUNT:-1}" ]; then
+                        local vol=$(get_volume_name "$qr_num")
+                        local raw_key=$(get_raw_key "$vol")
+                        local node_id=$(get_node_id "$vol")
+                        if [ -n "$raw_key" ] && command -v qrencode &>/dev/null; then
+                            local hostname_str=$(hostname 2>/dev/null || echo "conduit")
+                            local claim_json="{\"version\":1,\"data\":{\"key\":\"${raw_key}\",\"name\":\"${hostname_str}\"}}"
+                            local claim_b64=$(echo -n "$claim_json" | base64 | tr -d '\n')
+                            local claim_url="network.ryve.app://(app)/conduits?claim=${claim_b64}"
+                            qrencode -t PNG -o "/tmp/conduit_qr_${qr_num}.png" "$claim_url" 2>/dev/null
+                            if [ -f "/tmp/conduit_qr_${qr_num}.png" ]; then
+                                telegram_send_photo "/tmp/conduit_qr_${qr_num}.png" "Container ${qr_num} — Conduit ID: ${node_id:-unknown}"
+                                rm -f "/tmp/conduit_qr_${qr_num}.png"
+                            else
+                                telegram_send "❌ Failed to generate QR code for container ${qr_num}"
+                            fi
+                        elif ! command -v qrencode &>/dev/null; then
+                            telegram_send "❌ qrencode not installed. Install with: apt install qrencode"
+                        else
+                            telegram_send "❌ Key not available for container ${qr_num}. Start it first."
+                        fi
+                    else
+                        telegram_answer_callback "$cb_id" "Invalid container"
+                    fi
+                    ;;
+                *)
+                    telegram_answer_callback "$cb_id" ""
+                    ;;
+            esac
+            continue
+        fi
+
+        # Handle regular commands
+        local cmd="$field2"
         case "$cmd" in
             /status|/status@*)
                 local report=$(build_report)
@@ -5475,6 +6467,81 @@ except Exception:
                 ct_msg+="/restart\_N  /stop\_N  /start\_N — manage containers"
                 telegram_send "$ct_msg"
                 ;;
+            /restart_all|/restart_all@*)
+                local ra_ok=0 ra_fail=0
+                for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+                    local cname=$(get_container_name "$i")
+                    if docker restart "$cname" >/dev/null 2>&1; then
+                        ra_ok=$((ra_ok + 1))
+                    else
+                        ra_fail=$((ra_fail + 1))
+                    fi
+                done
+                # Restart snowflake containers if enabled
+                if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+                    local si
+                    for si in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+                        local sf_cname="snowflake-proxy"
+                        [ "$si" -gt 1 ] && sf_cname="snowflake-proxy-${si}"
+                        docker restart "$sf_cname" >/dev/null 2>&1 && ra_ok=$((ra_ok + 1)) || ra_fail=$((ra_fail + 1))
+                    done
+                fi
+                if [ "$ra_fail" -eq 0 ]; then
+                    telegram_send "✅ All ${ra_ok} containers restarted successfully"
+                else
+                    telegram_send "⚠️ Restarted ${ra_ok} containers (${ra_fail} failed)"
+                fi
+                ;;
+            /start_all|/start_all@*)
+                local sa_ok=0 sa_fail=0
+                for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+                    local cname=$(get_container_name "$i")
+                    if docker start "$cname" >/dev/null 2>&1; then
+                        sa_ok=$((sa_ok + 1))
+                    else
+                        sa_fail=$((sa_fail + 1))
+                    fi
+                done
+                # Start snowflake containers if enabled
+                if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+                    local si
+                    for si in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+                        local sf_cname="snowflake-proxy"
+                        [ "$si" -gt 1 ] && sf_cname="snowflake-proxy-${si}"
+                        docker start "$sf_cname" >/dev/null 2>&1 && sa_ok=$((sa_ok + 1)) || sa_fail=$((sa_fail + 1))
+                    done
+                fi
+                if [ "$sa_fail" -eq 0 ]; then
+                    telegram_send "🟢 All ${sa_ok} containers started successfully"
+                else
+                    telegram_send "⚠️ Started ${sa_ok} containers (${sa_fail} failed)"
+                fi
+                ;;
+            /stop_all|/stop_all@*)
+                local sto_ok=0 sto_fail=0
+                for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+                    local cname=$(get_container_name "$i")
+                    if docker stop "$cname" >/dev/null 2>&1; then
+                        sto_ok=$((sto_ok + 1))
+                    else
+                        sto_fail=$((sto_fail + 1))
+                    fi
+                done
+                # Stop snowflake containers if enabled
+                if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+                    local si
+                    for si in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+                        local sf_cname="snowflake-proxy"
+                        [ "$si" -gt 1 ] && sf_cname="snowflake-proxy-${si}"
+                        docker stop "$sf_cname" >/dev/null 2>&1 && sto_ok=$((sto_ok + 1)) || sto_fail=$((sto_fail + 1))
+                    done
+                fi
+                if [ "$sto_fail" -eq 0 ]; then
+                    telegram_send "🛑 All ${sto_ok} containers stopped"
+                else
+                    telegram_send "⚠️ Stopped ${sto_ok} containers (${sto_fail} failed)"
+                fi
+                ;;
             /restart_*|/stop_*|/start_*)
                 local action="${cmd%%_*}"     # /restart, /stop, or /start
                 action="${action#/}"          # restart, stop, or start
@@ -5494,21 +6561,220 @@ except Exception:
                     fi
                 fi
                 ;;
+            /settings|/settings@*)
+                local bw_display="${BANDWIDTH:-5}"
+                if [ "$bw_display" = "-1" ]; then
+                    bw_display="Unlimited"
+                else
+                    bw_display="${bw_display} Mbps"
+                fi
+                local dc_display="${DATA_CAP_GB:-0}"
+                if [ "$dc_display" = "0" ]; then
+                    dc_display="Unlimited"
+                else
+                    dc_display="${dc_display} GB"
+                fi
+                local st_msg="⚙️ *Current Settings*"
+                st_msg+=$'\n'
+                st_msg+="👥 Max Clients: ${MAX_CLIENTS:-200}"
+                st_msg+=$'\n'
+                st_msg+="📶 Bandwidth: ${bw_display}"
+                st_msg+=$'\n'
+                st_msg+="📦 Containers: ${CONTAINER_COUNT:-1}"
+                st_msg+=$'\n'
+                st_msg+="💾 Data Cap: ${dc_display}"
+                st_msg+=$'\n'
+                st_msg+="📊 Tracker: ${TRACKER_ENABLED:-true}"
+                st_msg+=$'\n'
+                st_msg+="🔔 Report Interval: every ${TELEGRAM_INTERVAL:-6}h"
+                st_msg+=$'\n'
+                st_msg+="🔕 Alerts: ${TELEGRAM_ALERTS_ENABLED:-true}"
+                telegram_send "$st_msg"
+                ;;
+            /health|/health@*)
+                local h_msg="🏥 *Health Check*"
+                h_msg+=$'\n'
+                if docker info >/dev/null 2>&1; then
+                    h_msg+="🐳 Docker: ✅ Running"
+                else
+                    h_msg+="🐳 Docker: ❌ Not running"
+                fi
+                h_msg+=$'\n'
+                for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+                    local cname=$(get_container_name "$i")
+                    local is_running=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c "^${cname}$" || true)
+                    local restarts=$(docker inspect --format='{{.RestartCount}}' "$cname" 2>/dev/null || echo "N/A")
+                    if [ "${is_running:-0}" -gt 0 ]; then
+                        h_msg+="📦 ${cname}: 🟢 Running (restarts: ${restarts})"
+                    else
+                        h_msg+="📦 ${cname}: 🔴 Stopped (restarts: ${restarts})"
+                    fi
+                    h_msg+=$'\n'
+                done
+                local net_ok=false
+                for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+                    local cname=$(get_container_name "$i")
+                    if timeout 5 docker logs --tail 100 "$cname" 2>&1 | grep -q "\[STATS\]\|Connected to Psiphon"; then
+                        net_ok=true
+                        break
+                    fi
+                done
+                if [ "$net_ok" = true ]; then
+                    h_msg+="🌐 Network: ✅ Connected"
+                else
+                    h_msg+="🌐 Network: ⚠️ No connection detected"
+                fi
+                h_msg+=$'\n'
+                if command -v systemctl &>/dev/null && systemctl is-active conduit-tracker.service &>/dev/null; then
+                    h_msg+="📊 Tracker: ✅ Active"
+                else
+                    h_msg+="📊 Tracker: ❌ Inactive"
+                fi
+                h_msg+=$'\n'
+                if command -v geoiplookup &>/dev/null; then
+                    h_msg+="🌍 GeoIP: ✅ geoiplookup"
+                elif command -v mmdblookup &>/dev/null; then
+                    h_msg+="🌍 GeoIP: ✅ mmdblookup"
+                else
+                    h_msg+="🌍 GeoIP: ⚠️ Not installed"
+                fi
+                telegram_send "$h_msg"
+                ;;
+            /logs_*)
+                local log_num="${cmd#/logs_}"
+                log_num="${log_num%%@*}"
+                if ! [[ "$log_num" =~ ^[0-9]+$ ]] || [ "$log_num" -lt 1 ] || [ "$log_num" -gt "${CONTAINER_COUNT:-1}" ]; then
+                    telegram_send "❌ Invalid container number: ${log_num}. Use 1-${CONTAINER_COUNT:-1}."
+                else
+                    local cname=$(get_container_name "$log_num")
+                    local log_output
+                    log_output=$(timeout 10 docker logs --tail 15 "$cname" 2>&1 || echo "Failed to get logs")
+                    # Truncate to fit Telegram 4096 char limit
+                    if [ ${#log_output} -gt 3800 ]; then
+                        log_output="${log_output:0:3800}..."
+                    fi
+                    # Send without escape_md — code blocks render content literally
+                    local escaped_cname=$(escape_md "$cname")
+                    telegram_send "📋 *Logs: ${escaped_cname}* (last 15 lines):
+\`\`\`
+${log_output}
+\`\`\`"
+                fi
+                ;;
+            /update|/update@*)
+                telegram_send "🔄 Checking for updates..."
+                local conduit_img="ghcr.io/ssmirr/conduit/conduit:latest"
+                local pull_out
+                pull_out=$(docker pull "$conduit_img" 2>&1)
+                if [ $? -ne 0 ]; then
+                    telegram_send "❌ Failed to pull image. Check internet connection."
+                elif echo "$pull_out" | grep -q "Status: Image is up to date"; then
+                    telegram_send "✅ Docker image is already up to date."
+                elif echo "$pull_out" | grep -q "Downloaded newer image\|Pull complete"; then
+                    telegram_send "📦 New image found. Recreating containers..."
+                    local upd_ok=0 upd_fail=0
+                    for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+                        local cname=$(get_container_name "$i")
+                        local vname
+                        if [ "$i" -eq 1 ]; then vname="conduit-data"; else vname="conduit-data-${i}"; fi
+                        local mc=${MAX_CLIENTS:-200}
+                        local bw=${BANDWIDTH:-5}
+                        # Per-container overrides
+                        local mc_var="MAX_CLIENTS_${i}"
+                        [ -n "${!mc_var:-}" ] && mc="${!mc_var}"
+                        local bw_var="BANDWIDTH_${i}"
+                        [ -n "${!bw_var:-}" ] && bw="${!bw_var}"
+                        local resource_args=""
+                        local cpus_var="CPUS_${i}"
+                        [ -n "${!cpus_var:-}" ] && resource_args+="--cpus ${!cpus_var} "
+                        [ -z "${!cpus_var:-}" ] && [ -n "${DOCKER_CPUS:-}" ] && resource_args+="--cpus ${DOCKER_CPUS} "
+                        local mem_var="MEMORY_${i}"
+                        [ -n "${!mem_var:-}" ] && resource_args+="--memory ${!mem_var} "
+                        [ -z "${!mem_var:-}" ] && [ -n "${DOCKER_MEMORY:-}" ] && resource_args+="--memory ${DOCKER_MEMORY} "
+                        docker rm -f "$cname" >/dev/null 2>&1
+                        if docker run -d \
+                            --name "$cname" \
+                            --restart unless-stopped \
+                            --log-opt max-size=15m \
+                            --log-opt max-file=3 \
+                            -v "${vname}:/home/conduit/data" \
+                            --network host \
+                            $resource_args \
+                            "$conduit_img" \
+                            start --max-clients "$mc" --bandwidth "$bw" --stats-file >/dev/null 2>&1; then
+                            upd_ok=$((upd_ok + 1))
+                        else
+                            upd_fail=$((upd_fail + 1))
+                        fi
+                    done
+                    # Clean up old dangling images
+                    docker image prune -f >/dev/null 2>&1
+                    if [ "$upd_fail" -eq 0 ]; then
+                        telegram_send "✅ Update complete. ${upd_ok} container(s) recreated with new image."
+                    else
+                        telegram_send "⚠️ Update: ${upd_ok} OK, ${upd_fail} failed."
+                    fi
+                else
+                    telegram_send "✅ Image check complete. No changes detected."
+                fi
+                ;;
+            /qr|/qr@*)
+                if [ "${CONTAINER_COUNT:-1}" -le 1 ]; then
+                    # Single container: generate and send QR directly
+                    local vol=$(get_volume_name 1)
+                    local raw_key=$(get_raw_key "$vol")
+                    local node_id=$(get_node_id "$vol")
+                    if [ -n "$raw_key" ] && command -v qrencode &>/dev/null; then
+                        local hostname_str=$(hostname 2>/dev/null || echo "conduit")
+                        local claim_json="{\"version\":1,\"data\":{\"key\":\"${raw_key}\",\"name\":\"${hostname_str}\"}}"
+                        local claim_b64=$(echo -n "$claim_json" | base64 | tr -d '\n')
+                        local claim_url="network.ryve.app://(app)/conduits?claim=${claim_b64}"
+                        qrencode -t PNG -o /tmp/conduit_qr_1.png "$claim_url" 2>/dev/null
+                        if [ -f /tmp/conduit_qr_1.png ]; then
+                            telegram_send_photo "/tmp/conduit_qr_1.png" "Conduit ID: ${node_id:-unknown}"
+                            rm -f /tmp/conduit_qr_1.png
+                        else
+                            telegram_send "❌ Failed to generate QR code"
+                        fi
+                    elif ! command -v qrencode &>/dev/null; then
+                        telegram_send "❌ qrencode not installed. Install with: apt install qrencode"
+                    else
+                        telegram_send "❌ Key not available. Start container first."
+                    fi
+                else
+                    # Multiple containers: send inline keyboard for selection
+                    local buttons=""
+                    for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+                        [ -n "$buttons" ] && buttons+=","
+                        buttons+="{\"text\":\"Container ${i}\",\"callback_data\":\"qr_${i}\"}"
+                    done
+                    local kb="{\"inline_keyboard\":[[${buttons}]]}"
+                    telegram_send_inline_keyboard "📱 Select a container for QR code:" "$kb"
+                fi
+                ;;
             /help|/help@*)
                 telegram_send "📖 *Available Commands*
 /status — Full status report
 /peers — Current peer count
-/uptime — Per-container uptime + 24h availability
+/uptime — Per-container uptime
 /containers — Per-container status
-/restart\_N — Restart container N
-/stop\_N — Stop container N
-/start\_N — Start container N
+/settings — Current configuration
+/health — Run health checks
+/logs\\_N — Last 15 log lines for container N
+/update — Update Docker image
+/qr — QR code for rewards
+/restart\\_N — Restart container N
+/stop\\_N — Stop container N
+/start\\_N — Start container N
+/restart\\_all — Restart all containers
+/start\\_all — Start all containers
+/stop\\_all — Stop all containers
 /help — Show this help"
                 ;;
         esac
     done <<< "$parsed"
 
-    # Update in-memory offset first (prevents reprocessing even if file write fails)
+    # Update in-memory offset first
     if [ "$max_id" -gt "$offset" ] 2>/dev/null; then
         _CMD_OFFSET=$max_id
         echo "$max_id" > "$offset_file" 2>/dev/null
@@ -5529,7 +6795,6 @@ build_report() {
     report+="📦 Containers: ${running}/${total} running"
     report+=$'\n'
 
-    # Uptime percentage + streak
     local uptime_log="$INSTALL_DIR/traffic_stats/uptime_log"
     if [ -s "$uptime_log" ]; then
         local avail_24h=$(calc_uptime_pct 86400)
@@ -5665,17 +6930,94 @@ build_report() {
     report+=$'\n'
 
     # Data usage
-    if [ "${DATA_CAP_GB:-0}" -gt 0 ] 2>/dev/null; then
+    if [ "${DATA_CAP_GB:-0}" -gt 0 ] || [ "${DATA_CAP_UP_GB:-0}" -gt 0 ] || [ "${DATA_CAP_DOWN_GB:-0}" -gt 0 ]; then
         local iface="${DATA_CAP_IFACE:-eth0}"
         local rx=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
         local tx=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
-        local total_used=$(( rx + tx + ${DATA_CAP_PRIOR_USAGE:-0} ))
-        local used_gb=$(awk "BEGIN {printf \"%.2f\", $total_used/1073741824}" 2>/dev/null || echo "0")
-        report+="📈 Data: ${used_gb} GB / ${DATA_CAP_GB} GB"
+        local d_rx=$(( rx - ${DATA_CAP_BASELINE_RX:-0} )); [ "$d_rx" -lt 0 ] && d_rx=0
+        local d_tx=$(( tx - ${DATA_CAP_BASELINE_TX:-0} )); [ "$d_tx" -lt 0 ] && d_tx=0
+        local t_rx=$(( d_rx + ${DATA_CAP_PRIOR_RX:-0} ))
+        local t_tx=$(( d_tx + ${DATA_CAP_PRIOR_TX:-0} ))
+        local t_all=$(( t_rx + t_tx ))
+        local cap_parts=""
+        if [ "${DATA_CAP_UP_GB:-0}" -gt 0 ] 2>/dev/null; then
+            local up_gb=$(awk "BEGIN {printf \"%.2f\", $t_tx/1073741824}" 2>/dev/null || echo "0")
+            cap_parts+="up ${up_gb}/${DATA_CAP_UP_GB}GB"
+        fi
+        if [ "${DATA_CAP_DOWN_GB:-0}" -gt 0 ] 2>/dev/null; then
+            [ -n "$cap_parts" ] && cap_parts+=" "
+            local dn_gb=$(awk "BEGIN {printf \"%.2f\", $t_rx/1073741824}" 2>/dev/null || echo "0")
+            cap_parts+="dn ${dn_gb}/${DATA_CAP_DOWN_GB}GB"
+        fi
+        if [ "${DATA_CAP_GB:-0}" -gt 0 ] 2>/dev/null; then
+            [ -n "$cap_parts" ] && cap_parts+=" "
+            local tot_gb=$(awk "BEGIN {printf \"%.2f\", $t_all/1073741824}" 2>/dev/null || echo "0")
+            cap_parts+="total ${tot_gb}/${DATA_CAP_GB}GB"
+        fi
+        report+="📈 Data: ${cap_parts}"
         report+=$'\n'
     fi
 
-    # Container restart counts
+    if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+        local sf_running=false
+        local _sf_chk
+        for _sf_chk in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+            local _sf_n="snowflake-proxy"
+            [ "$_sf_chk" -gt 1 ] && _sf_n="snowflake-proxy-${_sf_chk}"
+            docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_sf_n}$" && sf_running=true && break
+        done
+        if [ "$sf_running" = true ]; then
+            local sf_total_conn=0 sf_total_in=0 sf_total_out=0 sf_total_to=0
+            local si
+            for si in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+                local sf_mport=$((10000 - si))
+                local sf_metrics=$(curl -s --max-time 3 "http://127.0.0.1:${sf_mport}/internal/metrics" 2>/dev/null)
+                if [ -n "$sf_metrics" ]; then
+                    local sf_parsed
+                    sf_parsed=$(echo "$sf_metrics" | awk '
+                        /^tor_snowflake_proxy_connections_total[{ ]/ { conns += $NF }
+                        /^tor_snowflake_proxy_connection_timeouts_total / { to += $NF }
+                        /^tor_snowflake_proxy_traffic_inbound_bytes_total / { ib += $NF }
+                        /^tor_snowflake_proxy_traffic_outbound_bytes_total / { ob += $NF }
+                        END { printf "%d %d %d %d", conns, ib, ob, to }
+                    ' 2>/dev/null)
+                    local _pc _pi _po _pt
+                    read -r _pc _pi _po _pt <<< "$sf_parsed"
+                    sf_total_conn=$((sf_total_conn + ${_pc:-0}))
+                    sf_total_in=$((sf_total_in + ${_pi:-0}))
+                    sf_total_out=$((sf_total_out + ${_po:-0}))
+                    sf_total_to=$((sf_total_to + ${_pt:-0}))
+                fi
+            done
+            # Snowflake Prometheus reports KB despite metric name
+            sf_total_in=$((sf_total_in * 1000))
+            sf_total_out=$((sf_total_out * 1000))
+            local sf_in_f="0 B" sf_out_f="0 B"
+            if [ "${sf_total_in:-0}" -ge 1073741824 ] 2>/dev/null; then
+                sf_in_f=$(awk "BEGIN{printf \"%.2f GB\",${sf_total_in}/1073741824}")
+            elif [ "${sf_total_in:-0}" -ge 1048576 ] 2>/dev/null; then
+                sf_in_f=$(awk "BEGIN{printf \"%.2f MB\",${sf_total_in}/1048576}")
+            elif [ "${sf_total_in:-0}" -ge 1024 ] 2>/dev/null; then
+                sf_in_f=$(awk "BEGIN{printf \"%.2f KB\",${sf_total_in}/1024}")
+            elif [ "${sf_total_in:-0}" -gt 0 ] 2>/dev/null; then
+                sf_in_f="${sf_total_in} B"
+            fi
+            if [ "${sf_total_out:-0}" -ge 1073741824 ] 2>/dev/null; then
+                sf_out_f=$(awk "BEGIN{printf \"%.2f GB\",${sf_total_out}/1073741824}")
+            elif [ "${sf_total_out:-0}" -ge 1048576 ] 2>/dev/null; then
+                sf_out_f=$(awk "BEGIN{printf \"%.2f MB\",${sf_total_out}/1048576}")
+            elif [ "${sf_total_out:-0}" -ge 1024 ] 2>/dev/null; then
+                sf_out_f=$(awk "BEGIN{printf \"%.2f KB\",${sf_total_out}/1024}")
+            elif [ "${sf_total_out:-0}" -gt 0 ] 2>/dev/null; then
+                sf_out_f="${sf_total_out} B"
+            fi
+            local sf_to_label=""
+            [ "${sf_total_to:-0}" -gt 0 ] 2>/dev/null && sf_to_label=" (${sf_total_to} to)"
+            report+="❄ Snowflake: ${sf_total_conn} conn${sf_to_label} | ↓${sf_in_f} ↑${sf_out_f}"
+            report+=$'\n'
+        fi
+    fi
+
     local total_restarts=0
     local restart_details=""
     for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
@@ -5690,7 +7032,6 @@ build_report() {
         report+=$'\n'
     fi
 
-    # Top countries by connected peers (from tracker snapshot)
     local snap_file="$INSTALL_DIR/traffic_stats/tracker_snapshot"
     if [ -s "$snap_file" ]; then
         local top_peers
@@ -5707,7 +7048,6 @@ build_report() {
         fi
     fi
 
-    # Top countries by upload
     local data_file="$INSTALL_DIR/traffic_stats/cumulative_data"
     if [ -s "$data_file" ]; then
         local top_countries
@@ -5753,9 +7093,9 @@ last_weekly_ts=$(cat "$_ts_dir/.last_weekly_ts" 2>/dev/null || echo 0)
 last_report_ts=$(cat "$_ts_dir/.last_report_ts" 2>/dev/null || echo 0)
 [ "$last_report_ts" -eq "$last_report_ts" ] 2>/dev/null || last_report_ts=0
 
-while true; do
-    sleep 60
+last_periodic=$(date +%s)
 
+while true; do
     # Re-read settings
     [ -f "$INSTALL_DIR/settings.conf" ] && source "$INSTALL_DIR/settings.conf"
 
@@ -5763,49 +7103,54 @@ while true; do
     [ "$TELEGRAM_ENABLED" != "true" ] && exit 0
     [ -z "$TELEGRAM_BOT_TOKEN" ] && exit 0
 
-    # Core per-minute tasks
+    # Long-poll for commands (returns on new message or after 5s timeout)
     process_commands
-    track_uptime
-    check_alerts
 
-    # Daily rotation check (once per day, using wall-clock time)
+    sleep 1
+
     now_ts=$(date +%s)
-    if [ $((now_ts - last_rotation_ts)) -ge 86400 ] 2>/dev/null; then
-        rotate_cumulative_data
-        last_rotation_ts=$now_ts
-    fi
+    if [ $((now_ts - last_periodic)) -ge 60 ] 2>/dev/null; then
+        track_uptime
+        check_alerts
 
-    # Daily summary (wall-clock, survives restarts)
-    if [ "${TELEGRAM_DAILY_SUMMARY:-true}" = "true" ] && [ $((now_ts - last_daily_ts)) -ge 86400 ] 2>/dev/null; then
-        build_summary "Daily" 86400
-        last_daily_ts=$now_ts
-        echo "$now_ts" > "$_ts_dir/.last_daily_ts"
-    fi
-
-    # Weekly summary (wall-clock, survives restarts)
-    if [ "${TELEGRAM_WEEKLY_SUMMARY:-true}" = "true" ] && [ $((now_ts - last_weekly_ts)) -ge 604800 ] 2>/dev/null; then
-        build_summary "Weekly" 604800
-        last_weekly_ts=$now_ts
-        echo "$now_ts" > "$_ts_dir/.last_weekly_ts"
-    fi
-
-    # Regular periodic report (wall-clock aligned to start hour)
-    # Reports fire when current hour matches start_hour + N*interval
-    interval_hours=${TELEGRAM_INTERVAL:-6}
-    start_hour=${TELEGRAM_START_HOUR:-0}
-    interval_secs=$((interval_hours * 3600))
-    current_hour=$(date +%-H)
-    # Check if this hour is a scheduled slot: (current_hour - start_hour) mod interval == 0
-    hour_diff=$(( (current_hour - start_hour + 24) % 24 ))
-    if [ "$interval_hours" -gt 0 ] && [ $((hour_diff % interval_hours)) -eq 0 ] 2>/dev/null; then
-        # Only send once per slot (check if enough time passed since last report)
-        if [ $((now_ts - last_report_ts)) -ge $((interval_secs - 120)) ] 2>/dev/null; then
-            report=$(build_report)
-            telegram_send "$report"
-            record_snapshot
-            last_report_ts=$now_ts
-            echo "$now_ts" > "$_ts_dir/.last_report_ts"
+        # Daily rotation
+        if [ $((now_ts - last_rotation_ts)) -ge 86400 ] 2>/dev/null; then
+            rotate_cumulative_data
+            last_rotation_ts=$now_ts
         fi
+
+        # Daily summary (wall-clock, survives restarts)
+        if [ "${TELEGRAM_DAILY_SUMMARY:-true}" = "true" ] && [ $((now_ts - last_daily_ts)) -ge 86400 ] 2>/dev/null; then
+            build_summary "Daily" 86400
+            last_daily_ts=$now_ts
+            echo "$now_ts" > "$_ts_dir/.last_daily_ts"
+        fi
+
+        # Weekly summary (wall-clock, survives restarts)
+        if [ "${TELEGRAM_WEEKLY_SUMMARY:-true}" = "true" ] && [ $((now_ts - last_weekly_ts)) -ge 604800 ] 2>/dev/null; then
+            build_summary "Weekly" 604800
+            last_weekly_ts=$now_ts
+            echo "$now_ts" > "$_ts_dir/.last_weekly_ts"
+        fi
+
+        # Regular periodic report (wall-clock aligned to start hour)
+        # Reports fire when current hour matches start_hour + N*interval
+        interval_hours=${TELEGRAM_INTERVAL:-6}
+        start_hour=${TELEGRAM_START_HOUR:-0}
+        interval_secs=$((interval_hours * 3600))
+        current_hour=$(date +%-H)
+        hour_diff=$(( (current_hour - start_hour + 24) % 24 ))
+        if [ "$interval_hours" -gt 0 ] && [ $((hour_diff % interval_hours)) -eq 0 ] 2>/dev/null; then
+            if [ $((now_ts - last_report_ts)) -ge $((interval_secs - 120)) ] 2>/dev/null; then
+                report=$(build_report)
+                telegram_send "$report"
+                record_snapshot
+                last_report_ts=$now_ts
+                echo "$now_ts" > "$_ts_dir/.last_report_ts"
+            fi
+        fi
+
+        last_periodic=$now_ts
     fi
 done
 TGEOF
@@ -5892,9 +7237,20 @@ show_about() {
     echo -e "    ${GREEN}✓${NC} No logs stored | Clean uninstall available"
     echo ""
     echo -e "${CYAN}──────────────────────────────────────────────────────────────────${NC}"
-    echo -e "  ${BOLD}Made by Sam${NC}"
+    echo -e "  ${BOLD}Made by Sam - SamNet Technologies${NC}"
     echo -e "  GitHub:  ${CYAN}https://github.com/SamNet-dev/conduit-manager${NC}"
+    echo -e "  Twitter: ${CYAN}https://x.com/YourAnonHeart${NC}"
     echo -e "  Psiphon: ${CYAN}https://psiphon.ca${NC}"
+    echo ""
+    echo -e "${CYAN}──────────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}${YELLOW}Special Thanks${NC}"
+    echo -e "  ${BOLD}ssmirr${NC} - For his dedicated fork of Psiphon Conduit that"
+    echo -e "  makes this project possible. His commitment to maintaining"
+    echo -e "  and improving the conduit container has enabled thousands"
+    echo -e "  of volunteers to run nodes and help censored users worldwide."
+    echo ""
+    echo -e "  GitHub:  ${CYAN}https://github.com/ssmirr${NC}"
+    echo -e "  Twitter: ${CYAN}https://x.com/PawnToPromotion${NC}"
     echo -e "${CYAN}══════════════════════════════════════════════════════════════════${NC}"
     echo ""
     read -n 1 -s -r -p "  Press any key to return..." < /dev/tty || true
@@ -5937,6 +7293,7 @@ show_settings_menu() {
             echo -e "  d. 📡 Toggle tracker (${tracker_enabled_status}) — saves CPU when off"
             echo -e "  r. 📡 Restart tracker service  (${tracker_status})"
             echo -e "  t. 📲 Telegram Notifications"
+            echo -e "  s. 🌐 Remote Servers"
             echo -e ""
             echo -e "  u. 🗑️  Uninstall"
             echo -e "  0. ← Back to main menu"
@@ -6076,6 +7433,10 @@ show_settings_menu() {
                 ;;
             t)
                 show_telegram_menu
+                redraw=true
+                ;;
+            s|S)
+                show_server_management_submenu
                 redraw=true
                 ;;
             u)
@@ -6405,17 +7766,18 @@ telegram_setup_wizard() {
 }
 
 show_menu() {
-    # Auto-fix systemd service files: rewrite stale/old files, single daemon-reload
+    # Fix outdated systemd service files
     if command -v systemctl &>/dev/null; then
         local need_reload=false
 
-        # Fix conduit.service if it has old format (Requires, Type=simple, Restart=always, hardcoded args)
+        # Fix outdated conduit.service
         if [ -f /etc/systemd/system/conduit.service ]; then
             local need_rewrite=false
             grep -q "Requires=docker.service" /etc/systemd/system/conduit.service 2>/dev/null && need_rewrite=true
             grep -q "Type=simple" /etc/systemd/system/conduit.service 2>/dev/null && need_rewrite=true
             grep -q "Restart=always" /etc/systemd/system/conduit.service 2>/dev/null && need_rewrite=true
             grep -q "max-clients" /etc/systemd/system/conduit.service 2>/dev/null && need_rewrite=true
+            grep -q "conduit start$" /etc/systemd/system/conduit.service 2>/dev/null && need_rewrite=true
             if [ "$need_rewrite" = true ]; then
                 cat > /etc/systemd/system/conduit.service << SVCEOF
 [Unit]
@@ -6426,8 +7788,8 @@ Wants=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/bin/conduit start
-ExecStop=/usr/local/bin/conduit stop
+ExecStart=/usr/local/bin/conduit start --auto
+ExecStop=/usr/local/bin/conduit stop --auto
 
 [Install]
 WantedBy=multi-user.target
@@ -6468,16 +7830,12 @@ SVCEOF
         if ! is_tracker_active; then
             setup_tracker_service
         elif [ "$old_hash" != "$new_hash" ]; then
-            # Script changed (upgrade), restart to pick up new code
             systemctl restart conduit-tracker.service 2>/dev/null || true
         fi
     fi
 
-    # Load settings (Telegram service is only started explicitly by the user via the Telegram menu)
     [ -f "$INSTALL_DIR/settings.conf" ] && source "$INSTALL_DIR/settings.conf"
 
-    # If the Telegram service is already running, regenerate the script and restart
-    # so it picks up any code changes from a script upgrade
     if command -v systemctl &>/dev/null && systemctl is-active conduit-telegram.service &>/dev/null; then
         telegram_generate_notify_script
         systemctl restart conduit-telegram.service 2>/dev/null || true
@@ -6505,6 +7863,15 @@ SVCEOF
             echo -e "  9. ⚙️  Settings & Tools"
             echo -e "  c. 📦 Manage containers"
             echo -e "  a. 📊 Advanced stats"
+            echo -e "  m. 🌐 Multi-server dashboard"
+            # Snowflake menu item
+            if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+                local _sf_label="${RED}Stopped${NC}"
+                is_snowflake_running && _sf_label="${GREEN}Running${NC}"
+                echo -e "  f. ❄  Snowflake Proxy [${_sf_label}]"
+            else
+                echo -e "  f. ❄  Snowflake Proxy"
+            fi
             echo -e "  i. ℹ️  Info & Help"
             echo -e "  0. 🚪 Exit"
             echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
@@ -6563,6 +7930,14 @@ SVCEOF
                 show_advanced_stats
                 redraw=true
                 ;;
+            m|M)
+                show_multi_dashboard
+                redraw=true
+                ;;
+            f|F)
+                show_snowflake_menu
+                redraw=true
+                ;;
             i)
                 show_info_menu
                 redraw=true
@@ -6594,13 +7969,15 @@ show_info_menu() {
             echo -e "  2. 📊 Understanding the Stats Pages"
             echo -e "  3. 📦 Containers & Scaling"
             echo -e "  4. 🔒 Privacy & Security"
-            echo -e "  5. 🚀 About Psiphon Conduit"
-            echo -e "  6. 📈 Dashboard Metrics Explained"
+            echo -e "  5. ❄️  Snowflake Proxy"
+            echo -e "  6. ⚖️  Safety & Legal"
+            echo -e "  7. 🚀 About Psiphon Conduit"
+            echo -e "  8. 📈 Dashboard Metrics Explained"
             echo ""
             echo -e "  [b] Back to menu"
             echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
             echo ""
-            redraw=true
+            redraw=false
         fi
         read -p "  Select page: " info_choice < /dev/tty || break
         case "$info_choice" in
@@ -6608,8 +7985,10 @@ show_info_menu() {
             2) _info_stats; redraw=true ;;
             3) _info_containers; redraw=true ;;
             4) _info_privacy; redraw=true ;;
-            5) show_about; redraw=true ;;
-            6) show_dashboard_info; redraw=true ;;
+            5) show_info_snowflake; redraw=true ;;
+            6) show_info_safety; redraw=true ;;
+            7) show_about; redraw=true ;;
+            8) show_dashboard_info; redraw=true ;;
             b|"") break ;;
             *) echo -e "  ${RED}Invalid.${NC}"; sleep 1; redraw=true ;;
         esac
@@ -6759,29 +8138,1372 @@ _info_privacy() {
     read -n 1 -s -r -p "  Press any key to return..." < /dev/tty || true
 }
 
+#═══════════════════════════════════════════════════════════════════════
+# Multi-Server Dashboard
+#═══════════════════════════════════════════════════════════════════════
+
+load_servers() {
+    SERVER_LABELS=()
+    SERVER_CONNS=()
+    SERVER_AUTHS=()
+    SERVER_COUNT=0
+    local conf="$INSTALL_DIR/servers.conf"
+    [ -f "$conf" ] || return
+    while IFS='|' read -r label conn auth_type _rest || [ -n "$label" ]; do
+        [[ "$label" =~ ^#.*$ ]] && continue
+        [ -z "$label" ] || [ -z "$conn" ] && continue
+        SERVER_LABELS+=("$label")
+        SERVER_CONNS+=("$conn")
+        SERVER_AUTHS+=("${auth_type:-key}")
+        SERVER_COUNT=$((SERVER_COUNT + 1))
+    done < "$conf"
+}
+
+# Credential management helpers for password-based SSH auth
+_ensure_sshpass() {
+    command -v sshpass &>/dev/null && return 0
+    echo ""
+    echo -e "  ${YELLOW}sshpass is required for password-based SSH but is not installed.${NC}"
+    read -p "  Install sshpass now? (y/n): " install_it < /dev/tty || return 1
+    [[ "$install_it" =~ ^[Yy]$ ]] || { echo -e "  ${RED}Cannot proceed without sshpass.${NC}"; return 1; }
+
+    echo -e "  ${DIM}Installing sshpass...${NC}"
+    local installed=false
+    if command -v apt-get &>/dev/null; then
+        apt-get install -y -qq sshpass 2>/dev/null || { apt-get update -qq 2>/dev/null && apt-get install -y -qq sshpass 2>/dev/null; } && installed=true
+    elif command -v dnf &>/dev/null; then
+        dnf install -y -q sshpass 2>/dev/null && installed=true
+    elif command -v yum &>/dev/null; then
+        yum install -y -q sshpass 2>/dev/null && installed=true
+    elif command -v pacman &>/dev/null; then
+        pacman -Sy --noconfirm sshpass 2>/dev/null && installed=true
+    elif command -v zypper &>/dev/null; then
+        zypper install -y -n sshpass 2>/dev/null && installed=true
+    elif command -v apk &>/dev/null; then
+        apk add --no-cache sshpass 2>/dev/null && installed=true
+    fi
+
+    if [ "$installed" = true ] && command -v sshpass &>/dev/null; then
+        echo -e "  ${GREEN}✓ sshpass installed successfully.${NC}"
+        return 0
+    else
+        echo -e "  ${RED}✗ Failed to install sshpass. Install manually: apt install sshpass${NC}"
+        return 1
+    fi
+}
+
+_creds_key() {
+    local keyfile="$INSTALL_DIR/.creds_key"
+    if [ ! -f "$keyfile" ]; then
+        ( umask 077; openssl rand -hex 32 > "$keyfile" 2>/dev/null )
+        if [ $? -ne 0 ] || [ ! -s "$keyfile" ]; then
+            echo "ERROR: Failed to generate encryption key" >&2
+            rm -f "$keyfile"
+            return 1
+        fi
+    fi
+    echo "$keyfile"
+}
+
+_encrypt_pass() {
+    local plaintext="$1"
+    local keyfile
+    keyfile=$(_creds_key) || return 1
+    # -A = single-line base64 (no wrapping) to keep one ciphertext per line in creds file
+    printf '%s' "$plaintext" | openssl enc -aes-256-cbc -pbkdf2 -a -A -pass "file:$keyfile" 2>/dev/null
+}
+
+_decrypt_pass() {
+    local ciphertext="$1"
+    local keyfile
+    keyfile=$(_creds_key) || return 1
+    # printf with \n needed for openssl base64 decoder; -A for single-line input
+    printf '%s\n' "$ciphertext" | openssl enc -aes-256-cbc -pbkdf2 -a -A -d -pass "file:$keyfile" 2>/dev/null
+}
+
+_save_cred() {
+    local label="$1"
+    local password="$2"
+    local credsfile="$INSTALL_DIR/servers.creds"
+    local encrypted
+    encrypted=$(_encrypt_pass "$password") || return 1
+    [ -z "$encrypted" ] && return 1
+
+    # Remove existing entry for this label
+    if [ -f "$credsfile" ]; then
+        local tmp="${credsfile}.tmp.$$"
+        grep -v "^${label}|" "$credsfile" > "$tmp" 2>/dev/null || true
+        mv -f "$tmp" "$credsfile"
+        chmod 600 "$credsfile" 2>/dev/null || true
+    fi
+
+    ( umask 077; echo "${label}|${encrypted}" >> "$credsfile" )
+}
+
+_load_cred() {
+    local label="$1"
+    local credsfile="$INSTALL_DIR/servers.creds"
+    [ -f "$credsfile" ] || return 1
+    local encrypted
+    encrypted=$(grep "^${label}|" "$credsfile" 2>/dev/null | head -1 | cut -d'|' -f2-)
+    [ -z "$encrypted" ] && return 1
+    local plaintext
+    plaintext=$(_decrypt_pass "$encrypted")
+    [ -z "$plaintext" ] && return 1
+    echo "$plaintext"
+}
+
+_remove_cred() {
+    local label="$1"
+    local credsfile="$INSTALL_DIR/servers.creds"
+    [ -f "$credsfile" ] || return 0
+    local tmp="${credsfile}.tmp.$$"
+    grep -v "^${label}|" "$credsfile" > "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$credsfile"
+    chmod 600 "$credsfile" 2>/dev/null || true
+}
+
+add_server_interactive() {
+    local label conn auth_choice setup_key existing anyway
+    echo -e "${CYAN}═══ ADD REMOTE SERVER ═══${NC}"
+    echo ""
+    read -p "  Server label (e.g. vps-nyc): " label < /dev/tty || return
+    # Validate label
+    if ! [[ "$label" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        echo -e "${RED}  Invalid label. Use only letters, numbers, dashes, underscores.${NC}"
+        return 1
+    fi
+    # Check server limit
+    load_servers
+    if [ "$SERVER_COUNT" -ge 9 ]; then
+        echo -e "${RED}  Maximum of 9 remote servers reached.${NC}"
+        return 1
+    fi
+    # Check for duplicates
+    for existing in "${SERVER_LABELS[@]}"; do
+        if [ "$existing" = "$label" ]; then
+            echo -e "${RED}  Server '$label' already exists.${NC}"
+            return 1
+        fi
+    done
+
+    read -p "  SSH connection (user@host or user@host:port): " conn < /dev/tty || return
+    if ! [[ "$conn" =~ ^[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+(:[0-9]+)?$ ]]; then
+        echo -e "${RED}  Invalid SSH format. Use: user@host or user@host:port${NC}"
+        return 1
+    fi
+
+    # Parse host and port
+    local ssh_host ssh_port
+    if [[ "$conn" == *:* ]]; then
+        ssh_host="${conn%:*}"
+        ssh_port="${conn##*:}"
+    else
+        ssh_host="$conn"
+        ssh_port=22
+    fi
+
+    # Detect non-root user for sudo prefix on remote commands
+    local ssh_user="${conn%%@*}"
+    local _sudo=""
+    if [ "$ssh_user" != "root" ]; then
+        _sudo="sudo "
+    fi
+
+    # Auth method selection
+    echo ""
+    echo -e "  Authentication method:"
+    echo -e "  1. 🔑 SSH Key (recommended)"
+    echo -e "  2. 🔒 Password"
+    echo ""
+    read -p "  Select (1/2) [1]: " auth_choice < /dev/tty || return
+    auth_choice="${auth_choice:-1}"
+
+    local auth_type="key"
+    local password=""
+    local connection_ok=false
+
+    if [ "$auth_choice" = "2" ]; then
+        # --- Password auth flow ---
+        _ensure_sshpass || return 1
+
+        auth_type="pass"
+        echo ""
+        read -s -p "  SSH password: " password < /dev/tty || return
+        echo ""
+        [ -z "$password" ] && { echo -e "${RED}  Password cannot be empty.${NC}"; return 1; }
+
+        echo ""
+        echo -e "  Testing SSH connection to ${CYAN}${conn}${NC} (password)..."
+        if SSHPASS="$password" sshpass -e ssh -o ConnectTimeout=10 \
+               -o StrictHostKeyChecking=accept-new \
+               -o PubkeyAuthentication=no \
+               -p "$ssh_port" "$ssh_host" "echo ok" 2>/dev/null | grep -q "ok"; then
+            echo -e "  ${GREEN}✓ Connection successful!${NC}"
+            connection_ok=true
+            # For non-root users, verify sudo access
+            if [ "$ssh_user" != "root" ]; then
+                echo -e "  ${DIM}Non-root user detected. Checking sudo access...${NC}"
+                if SSHPASS="$password" sshpass -e ssh -o ConnectTimeout=5 \
+                       -o PubkeyAuthentication=no \
+                       -p "$ssh_port" "$ssh_host" "sudo -n true" 2>/dev/null; then
+                    echo -e "  ${GREEN}✓ Passwordless sudo verified.${NC}"
+                else
+                    echo -e "  ${YELLOW}⚠ Passwordless sudo not available for '${ssh_user}'.${NC}"
+                    echo -e "  ${DIM}  Remote commands require sudo. Add to sudoers:${NC}"
+                    echo -e "  ${DIM}  echo '${ssh_user} ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers.d/${ssh_user}${NC}"
+                    local _scont
+                    read -p "  Continue anyway? (y/n) [n]: " _scont < /dev/tty || return
+                    [[ "${_scont:-n}" =~ ^[Yy]$ ]] || return 1
+                fi
+            fi
+            if SSHPASS="$password" sshpass -e ssh -o ConnectTimeout=5 \
+                   -o PubkeyAuthentication=no \
+                   -p "$ssh_port" "$ssh_host" "${_sudo}command -v conduit" &>/dev/null; then
+                echo -e "  ${GREEN}✓ Conduit detected on remote server.${NC}"
+                # Check remote version and script hash to detect outdated code
+                local remote_ver needs_update=false update_reason=""
+                remote_ver=$(SSHPASS="$password" sshpass -e ssh -o ConnectTimeout=5 \
+                    -o PubkeyAuthentication=no \
+                    -p "$ssh_port" "$ssh_host" "${_sudo}conduit version 2>/dev/null" 2>/dev/null \
+                    | sed -n 's/.*v\([0-9][0-9.]*\).*/\1/p')
+                if [ -n "$remote_ver" ] && [ "$remote_ver" != "$VERSION" ]; then
+                    needs_update=true
+                    update_reason="Remote version: v${remote_ver} (local: v${VERSION})"
+                elif [ -n "$remote_ver" ]; then
+                    # Same version — compare script hash for code-level changes
+                    local local_hash remote_hash
+                    local_hash=$(sha256sum "$INSTALL_DIR/conduit" 2>/dev/null | cut -d' ' -f1)
+                    remote_hash=$(SSHPASS="$password" sshpass -e ssh -o ConnectTimeout=5 \
+                        -o PubkeyAuthentication=no \
+                        -p "$ssh_port" "$ssh_host" "${_sudo}sha256sum /opt/conduit/conduit 2>/dev/null" 2>/dev/null \
+                        | cut -d' ' -f1)
+                    if [ -n "$local_hash" ] && [ -n "$remote_hash" ] && [ "$local_hash" != "$remote_hash" ]; then
+                        needs_update=true
+                        update_reason="Same version (v${remote_ver}) but script differs"
+                    fi
+                fi
+                if [ "$needs_update" = true ]; then
+                    echo -e "  ${YELLOW}⚠ ${update_reason}${NC}"
+                    local do_update
+                    read -p "  Update remote server? (y/n) [y]: " do_update < /dev/tty || true
+                    do_update="${do_update:-y}"
+                    if [[ "$do_update" =~ ^[Yy]$ ]]; then
+                        echo -e "  ${DIM}Updating remote server...${NC}"
+                        if SSHPASS="$password" sshpass -e ssh -o ConnectTimeout=60 \
+                               -o PubkeyAuthentication=no \
+                               -p "$ssh_port" "$ssh_host" "${_sudo}conduit update" 2>/dev/null; then
+                            echo -e "  ${GREEN}✓ Remote server updated${NC}"
+                        else
+                            echo -e "  ${YELLOW}⚠ Update may have failed. You can update later from the dashboard.${NC}"
+                        fi
+                    fi
+                fi
+            else
+                echo -e "  ${YELLOW}⚠ 'conduit' command not found on remote server.${NC}"
+                echo -e "  ${DIM}  Install conduit on the remote server first for full functionality.${NC}"
+            fi
+        else
+            echo -e "  ${RED}✗ Connection failed. Check password, host, and port.${NC}"
+            read -p "  Add anyway? (y/n): " anyway < /dev/tty || return
+            [[ "$anyway" =~ ^[Yy]$ ]] || return 1
+        fi
+
+        # Offer SSH key setup for passwordless future connections
+        if [ "$connection_ok" = true ]; then
+            echo ""
+            echo -e "  ${CYAN}Set up SSH key for passwordless login? (recommended)${NC}"
+            read -p "  This avoids storing the password. (y/n) [y]: " setup_key < /dev/tty || true
+            setup_key="${setup_key:-y}"
+            if [[ "$setup_key" =~ ^[Yy]$ ]]; then
+                # Generate SSH key if none exists
+                if [ ! -f /root/.ssh/id_rsa.pub ] && [ ! -f /root/.ssh/id_ed25519.pub ]; then
+                    echo -e "  ${DIM}Generating SSH key pair...${NC}"
+                    mkdir -p /root/.ssh && chmod 700 /root/.ssh
+                    ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -q 2>/dev/null || \
+                    ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N "" -q 2>/dev/null
+                fi
+
+                # Copy key to remote server
+                echo -e "  ${DIM}Copying SSH key to ${conn}...${NC}"
+                if SSHPASS="$password" sshpass -e ssh-copy-id \
+                       -o StrictHostKeyChecking=accept-new \
+                       -p "$ssh_port" "$ssh_host" 2>/dev/null; then
+                    echo -e "  ${GREEN}✓ SSH key installed on remote server!${NC}"
+                    # Verify key auth works
+                    if ssh -o ConnectTimeout=5 -o BatchMode=yes \
+                           -p "$ssh_port" "$ssh_host" "echo ok" 2>/dev/null | grep -q "ok"; then
+                        echo -e "  ${GREEN}✓ Key-based auth verified. Switching to key auth.${NC}"
+                        auth_type="key"
+                        password=""
+                    else
+                        echo -e "  ${YELLOW}⚠ Key auth verification failed. Keeping password auth.${NC}"
+                    fi
+                else
+                    echo -e "  ${YELLOW}⚠ ssh-copy-id failed. Keeping password auth.${NC}"
+                fi
+            fi
+        fi
+
+        # Store encrypted password if still using password auth
+        if [ "$auth_type" = "pass" ] && [ -n "$password" ]; then
+            _save_cred "$label" "$password" || {
+                echo -e "${RED}  ✗ Failed to store encrypted credentials.${NC}"
+                return 1
+            }
+        fi
+    else
+        # --- SSH key auth flow (original) ---
+        echo ""
+        echo -e "  Testing SSH connection to ${CYAN}${conn}${NC}..."
+        if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
+               -o BatchMode=yes -p "$ssh_port" "$ssh_host" "echo ok" 2>/dev/null | grep -q "ok"; then
+            echo -e "  ${GREEN}✓ Connection successful!${NC}"
+            # For non-root users, verify sudo access
+            if [ "$ssh_user" != "root" ]; then
+                echo -e "  ${DIM}Non-root user detected. Checking sudo access...${NC}"
+                if ssh -o ConnectTimeout=5 -o BatchMode=yes \
+                       -p "$ssh_port" "$ssh_host" "sudo -n true" 2>/dev/null; then
+                    echo -e "  ${GREEN}✓ Passwordless sudo verified.${NC}"
+                else
+                    echo -e "  ${YELLOW}⚠ Passwordless sudo not available for '${ssh_user}'.${NC}"
+                    echo -e "  ${DIM}  Remote commands require sudo. Add to sudoers:${NC}"
+                    echo -e "  ${DIM}  echo '${ssh_user} ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers.d/${ssh_user}${NC}"
+                    local _scont
+                    read -p "  Continue anyway? (y/n) [n]: " _scont < /dev/tty || return
+                    [[ "${_scont:-n}" =~ ^[Yy]$ ]] || return 1
+                fi
+            fi
+            if ssh -o ConnectTimeout=5 -o BatchMode=yes -p "$ssh_port" "$ssh_host" "${_sudo}command -v conduit" &>/dev/null; then
+                echo -e "  ${GREEN}✓ Conduit detected on remote server.${NC}"
+                # Check remote version and script hash to detect outdated code
+                local remote_ver needs_update=false update_reason=""
+                remote_ver=$(ssh -o ConnectTimeout=5 -o BatchMode=yes \
+                    -p "$ssh_port" "$ssh_host" "${_sudo}conduit version 2>/dev/null" 2>/dev/null \
+                    | sed -n 's/.*v\([0-9][0-9.]*\).*/\1/p')
+                if [ -n "$remote_ver" ] && [ "$remote_ver" != "$VERSION" ]; then
+                    needs_update=true
+                    update_reason="Remote version: v${remote_ver} (local: v${VERSION})"
+                elif [ -n "$remote_ver" ]; then
+                    # Same version — compare script hash for code-level changes
+                    local local_hash remote_hash
+                    local_hash=$(sha256sum "$INSTALL_DIR/conduit" 2>/dev/null | cut -d' ' -f1)
+                    remote_hash=$(ssh -o ConnectTimeout=5 -o BatchMode=yes \
+                        -p "$ssh_port" "$ssh_host" "${_sudo}sha256sum /opt/conduit/conduit 2>/dev/null" 2>/dev/null \
+                        | cut -d' ' -f1)
+                    if [ -n "$local_hash" ] && [ -n "$remote_hash" ] && [ "$local_hash" != "$remote_hash" ]; then
+                        needs_update=true
+                        update_reason="Same version (v${remote_ver}) but script differs"
+                    fi
+                fi
+                if [ "$needs_update" = true ]; then
+                    echo -e "  ${YELLOW}⚠ ${update_reason}${NC}"
+                    local do_update
+                    read -p "  Update remote server? (y/n) [y]: " do_update < /dev/tty || true
+                    do_update="${do_update:-y}"
+                    if [[ "$do_update" =~ ^[Yy]$ ]]; then
+                        echo -e "  ${DIM}Updating remote server...${NC}"
+                        if ssh -o ConnectTimeout=60 -o BatchMode=yes \
+                               -p "$ssh_port" "$ssh_host" "${_sudo}conduit update" 2>/dev/null; then
+                            echo -e "  ${GREEN}✓ Remote server updated${NC}"
+                        else
+                            echo -e "  ${YELLOW}⚠ Update may have failed. You can update later from the dashboard.${NC}"
+                        fi
+                    fi
+                fi
+            else
+                echo -e "  ${YELLOW}⚠ 'conduit' command not found on remote server.${NC}"
+                echo -e "  ${DIM}  Install conduit on the remote server first for full functionality.${NC}"
+            fi
+        else
+            echo -e "  ${RED}✗ Connection failed.${NC}"
+            echo -e "  ${DIM}  Ensure SSH key-based auth is configured.${NC}"
+            read -p "  Add anyway? (y/n): " anyway < /dev/tty || return
+            [[ "$anyway" =~ ^[Yy]$ ]] || return 1
+        fi
+    fi
+
+    echo "${label}|${conn}|${auth_type}" >> "$INSTALL_DIR/servers.conf"
+    chmod 600 "$INSTALL_DIR/servers.conf" 2>/dev/null || true
+    echo ""
+    echo -e "  ${GREEN}✓ Server '${label}' added (${auth_type} auth).${NC}"
+}
+
+remove_server_interactive() {
+    load_servers
+    if [ "$SERVER_COUNT" -eq 0 ]; then
+        echo -e "${YELLOW}  No servers configured.${NC}"
+        return
+    fi
+    echo -e "${CYAN}═══ REMOVE SERVER ═══${NC}"
+    echo ""
+    for i in $(seq 0 $((SERVER_COUNT - 1))); do
+        echo "  $((i + 1)). ${SERVER_LABELS[$i]}  (${SERVER_CONNS[$i]})"
+    done
+    echo ""
+    read -p "  Select server to remove (1-${SERVER_COUNT}): " idx < /dev/tty || return
+    if ! [[ "$idx" =~ ^[0-9]+$ ]] || [ "$idx" -lt 1 ] || [ "$idx" -gt "$SERVER_COUNT" ]; then
+        echo -e "${RED}  Invalid selection.${NC}"
+        return 1
+    fi
+    local target_label="${SERVER_LABELS[$((idx - 1))]}"
+    # Close SSH control socket if open
+    local sock="/tmp/conduit-ssh-${target_label}.sock"
+    ssh -O exit -o "ControlPath=$sock" dummy 2>/dev/null || true
+
+    # Remove stored credentials if any
+    _remove_cred "$target_label"
+
+    local conf="$INSTALL_DIR/servers.conf"
+    local tmp="${conf}.tmp.$$"
+    grep -v "^${target_label}|" "$conf" > "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$conf"
+    chmod 600 "$conf" 2>/dev/null || true
+    echo -e "  ${GREEN}✓ Server '${target_label}' removed.${NC}"
+}
+
+edit_server_interactive() {
+    local idx si target_label target_conn target_auth echoice new_pass save_anyway new_conn
+    load_servers
+    if [ "$SERVER_COUNT" -eq 0 ]; then
+        echo -e "${YELLOW}  No servers configured.${NC}"
+        return
+    fi
+    echo -e "${CYAN}═══ EDIT SERVER ═══${NC}"
+    echo ""
+    for i in $(seq 0 $((SERVER_COUNT - 1))); do
+        local atype="${SERVER_AUTHS[$i]:-key}"
+        echo "  $((i + 1)). ${SERVER_LABELS[$i]}  (${SERVER_CONNS[$i]})  [${atype}]"
+    done
+    echo ""
+    read -p "  Select server to edit (1-${SERVER_COUNT}): " idx < /dev/tty || return
+    if ! [[ "$idx" =~ ^[0-9]+$ ]] || [ "$idx" -lt 1 ] || [ "$idx" -gt "$SERVER_COUNT" ]; then
+        echo -e "${RED}  Invalid selection.${NC}"
+        return 1
+    fi
+
+    local si=$((idx - 1))
+    local target_label="${SERVER_LABELS[$si]}"
+    local target_conn="${SERVER_CONNS[$si]}"
+    local target_auth="${SERVER_AUTHS[$si]:-key}"
+
+    echo ""
+    echo -e "  Server: ${GREEN}${target_label}${NC}  (${target_conn})  [${target_auth}]"
+    echo ""
+    echo -e "  What to change:"
+    echo -e "  1. 🔒 Update password"
+    echo -e "  2. 🔑 Switch to SSH key auth"
+    echo -e "  3. 🌐 Change connection (user@host:port)"
+    echo ""
+    echo -e "  0. ← Back"
+    echo ""
+    read -p "  Enter choice: " echoice < /dev/tty || return
+
+    case "$echoice" in
+        1)
+            # Update password
+            _ensure_sshpass || return 1
+            echo ""
+            read -s -p "  New SSH password: " new_pass < /dev/tty || return
+            echo ""
+            [ -z "$new_pass" ] && { echo -e "${RED}  Password cannot be empty.${NC}"; return 1; }
+
+            # Parse host/port for testing
+            local ssh_host ssh_port
+            if [[ "$target_conn" == *:* ]]; then
+                ssh_host="${target_conn%:*}"
+                ssh_port="${target_conn##*:}"
+            else
+                ssh_host="$target_conn"
+                ssh_port=22
+            fi
+
+            echo -e "  Testing new password..."
+            if SSHPASS="$new_pass" sshpass -e ssh -o ConnectTimeout=10 \
+                   -o StrictHostKeyChecking=accept-new \
+                   -o PubkeyAuthentication=no \
+                   -p "$ssh_port" "$ssh_host" "echo ok" 2>/dev/null | grep -q "ok"; then
+                echo -e "  ${GREEN}✓ Connection successful!${NC}"
+            else
+                echo -e "  ${YELLOW}⚠ Connection failed with new password.${NC}"
+                read -p "  Save anyway? (y/n): " save_anyway < /dev/tty || return
+                [[ "$save_anyway" =~ ^[Yy]$ ]] || return
+            fi
+
+            # Save new encrypted password
+            _save_cred "$target_label" "$new_pass" || {
+                echo -e "${RED}  ✗ Failed to store encrypted credentials.${NC}"
+                return 1
+            }
+
+            # Update auth type to pass if it was key
+            if [ "$target_auth" != "pass" ]; then
+                local conf="$INSTALL_DIR/servers.conf"
+                local tmp="${conf}.tmp.$$"
+                sed "s#^${target_label}|.*#${target_label}|${target_conn}|pass#" "$conf" > "$tmp" 2>/dev/null
+                if [ -s "$tmp" ]; then mv -f "$tmp" "$conf"; chmod 600 "$conf" 2>/dev/null || true
+                else rm -f "$tmp"; echo -e "${RED}  ✗ Config update failed.${NC}"; return 1; fi
+            fi
+
+            # Close existing SSH socket so next connection uses new password
+            local sock="/tmp/conduit-ssh-${target_label}.sock"
+            ssh -O exit -o "ControlPath=$sock" dummy 2>/dev/null || true
+
+            echo -e "  ${GREEN}✓ Password updated for '${target_label}'.${NC}"
+            ;;
+        2)
+            # Switch to SSH key auth (or re-setup broken key auth)
+            local ssh_host ssh_port
+            if [[ "$target_conn" == *:* ]]; then
+                ssh_host="${target_conn%:*}"
+                ssh_port="${target_conn##*:}"
+            else
+                ssh_host="$target_conn"
+                ssh_port=22
+            fi
+
+            # Close existing ControlMaster socket to avoid false positive
+            local sock="/tmp/conduit-ssh-${target_label}.sock"
+            ssh -O exit -o "ControlPath=$sock" dummy 2>/dev/null || true
+
+            # Try key auth first (fresh connection)
+            echo ""
+            echo -e "  Testing SSH key auth to ${CYAN}${target_conn}${NC}..."
+            if ssh -o ConnectTimeout=10 -o BatchMode=yes \
+                   -p "$ssh_port" "$ssh_host" "echo ok" 2>/dev/null | grep -q "ok"; then
+                echo -e "  ${GREEN}✓ Key auth already works!${NC}"
+            else
+                # Need current password to set up key
+                echo -e "  ${DIM}Key auth not set up yet. Need current password to install key.${NC}"
+                _ensure_sshpass || return 1
+                local cur_pass
+                cur_pass=$(_load_cred "$target_label")
+                if [ -z "$cur_pass" ]; then
+                    echo ""
+                    read -s -p "  Enter current SSH password: " cur_pass < /dev/tty || return
+                    echo ""
+                fi
+                [ -z "$cur_pass" ] && { echo -e "${RED}  No password available.${NC}"; return 1; }
+
+                # Generate SSH key if none exists
+                if [ ! -f /root/.ssh/id_rsa.pub ] && [ ! -f /root/.ssh/id_ed25519.pub ]; then
+                    echo -e "  ${DIM}Generating SSH key pair...${NC}"
+                    mkdir -p /root/.ssh && chmod 700 /root/.ssh
+                    ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -q 2>/dev/null || \
+                    ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N "" -q 2>/dev/null
+                fi
+
+                echo -e "  ${DIM}Copying SSH key to ${target_conn}...${NC}"
+                if SSHPASS="$cur_pass" sshpass -e ssh-copy-id \
+                       -o StrictHostKeyChecking=accept-new \
+                       -p "$ssh_port" "$ssh_host" 2>/dev/null; then
+                    echo -e "  ${GREEN}✓ SSH key installed!${NC}"
+                    # Verify
+                    if ! ssh -o ConnectTimeout=5 -o BatchMode=yes \
+                           -p "$ssh_port" "$ssh_host" "echo ok" 2>/dev/null | grep -q "ok"; then
+                        echo -e "  ${RED}✗ Key auth verification failed. Keeping password auth.${NC}"
+                        return
+                    fi
+                else
+                    echo -e "  ${RED}✗ ssh-copy-id failed. Keeping password auth.${NC}"
+                    return
+                fi
+            fi
+
+            # Update config to key auth
+            local conf="$INSTALL_DIR/servers.conf"
+            local tmp="${conf}.tmp.$$"
+            sed "s#^${target_label}|.*#${target_label}|${target_conn}|key#" "$conf" > "$tmp" 2>/dev/null
+            if [ -s "$tmp" ]; then mv -f "$tmp" "$conf"; chmod 600 "$conf" 2>/dev/null || true
+            else rm -f "$tmp"; echo -e "${RED}  ✗ Config update failed.${NC}"; return; fi
+
+            # Remove stored password
+            _remove_cred "$target_label"
+
+            # Close existing socket so next connection uses key
+            ssh -O exit -o "ControlPath=$sock" dummy 2>/dev/null || true
+
+            echo -e "  ${GREEN}✓ Switched '${target_label}' to SSH key auth. Password removed.${NC}"
+            ;;
+        3)
+            # Change connection string
+            echo ""
+            read -p "  New SSH connection (user@host or user@host:port): " new_conn < /dev/tty || return
+            if ! [[ "$new_conn" =~ ^[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+(:[0-9]+)?$ ]]; then
+                echo -e "${RED}  Invalid SSH format. Use: user@host or user@host:port${NC}"
+                return 1
+            fi
+
+            # Close old SSH socket
+            local sock="/tmp/conduit-ssh-${target_label}.sock"
+            ssh -O exit -o "ControlPath=$sock" dummy 2>/dev/null || true
+
+            # Rewrite config with new connection (preserve order)
+            local conf="$INSTALL_DIR/servers.conf"
+            local tmp="${conf}.tmp.$$"
+            sed "s#^${target_label}|.*#${target_label}|${new_conn}|${target_auth}#" "$conf" > "$tmp" 2>/dev/null
+            if [ -s "$tmp" ]; then mv -f "$tmp" "$conf"; chmod 600 "$conf" 2>/dev/null || true
+            else rm -f "$tmp"; echo -e "${RED}  ✗ Config update failed.${NC}"; return 1; fi
+
+            echo -e "  ${GREEN}✓ Connection updated for '${target_label}': ${new_conn}${NC}"
+            ;;
+        0|"") return ;;
+        *) echo -e "${RED}  Invalid choice.${NC}" ;;
+    esac
+}
+
+list_servers() {
+    load_servers
+    if [ "$SERVER_COUNT" -eq 0 ]; then
+        echo -e "${YELLOW}  No remote servers configured.${NC}"
+        echo -e "  Add one with: ${CYAN}conduit add-server${NC}"
+        return
+    fi
+    echo -e "${CYAN}═══ CONFIGURED SERVERS ═══${NC}"
+    echo ""
+    printf "  ${BOLD}%-4s %-20s %-28s %s${NC}\n" "#" "LABEL" "CONNECTION" "AUTH"
+    printf "  %-4s %-20s %-28s %s\n" "──" "────────────────────" "────────────────────────────" "────"
+    for i in $(seq 0 $((SERVER_COUNT - 1))); do
+        local atype="${SERVER_AUTHS[$i]:-key}"
+        if [ "$atype" = "pass" ]; then
+            atype="${YELLOW}pass${NC}"
+        else
+            atype="${GREEN}key${NC}"
+        fi
+        printf "  %-4d %-20s %-28s %b\n" "$((i + 1))" "${SERVER_LABELS[$i]}" "${SERVER_CONNS[$i]}" "$atype"
+    done
+    echo ""
+}
+
+show_server_management_submenu() {
+    local redraw=true
+    while true; do
+        if [ "$redraw" = true ]; then
+            clear
+            echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+            echo -e "  ${BOLD}REMOTE SERVERS${NC}"
+            echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+            echo ""
+            echo -e "  1. 📋 List servers"
+            echo -e "  2. ➕ Add server"
+            echo -e "  3. ✏️  Edit server"
+            echo -e "  4. ➖ Remove server"
+            echo ""
+            echo -e "  0. ← Back"
+            echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+            echo ""
+            redraw=false
+        fi
+        read -p "  Enter choice: " choice < /dev/tty || return
+        case "$choice" in
+            1)
+                list_servers
+                read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty || true
+                redraw=true
+                ;;
+            2)
+                add_server_interactive
+                read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty || true
+                redraw=true
+                ;;
+            3)
+                edit_server_interactive
+                read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty || true
+                redraw=true
+                ;;
+            4)
+                remove_server_interactive
+                read -n 1 -s -r -p "  Press any key to continue..." < /dev/tty || true
+                redraw=true
+                ;;
+            0|"") return ;;
+            *) echo -e "${RED}  Invalid choice.${NC}" ;;
+        esac
+    done
+}
+
+# SSH wrapper with ControlMaster for persistent connections
+ssh_cmd() {
+    local label="$1"
+    shift
+    local remote_cmd="$*"
+
+    local conn="" auth_type="key"
+    # Requires load_servers() called beforehand
+    for i in $(seq 0 $((SERVER_COUNT - 1))); do
+        if [ "${SERVER_LABELS[$i]}" = "$label" ]; then
+            conn="${SERVER_CONNS[$i]}"
+            auth_type="${SERVER_AUTHS[$i]:-key}"
+            break
+        fi
+    done
+    if [ -z "$conn" ]; then
+        echo "ERROR: Server '$label' not found" >&2
+        return 1
+    fi
+
+    local ssh_host ssh_port
+    if [[ "$conn" == *:* ]]; then
+        ssh_host="${conn%:*}"
+        ssh_port="${conn##*:}"
+    else
+        ssh_host="$conn"
+        ssh_port=22
+    fi
+
+    # If SSH user is not root, prefix command with sudo
+    local ssh_user="${ssh_host%%@*}"
+    if [ "$ssh_user" != "root" ] && [ -n "$remote_cmd" ]; then
+        remote_cmd="sudo $remote_cmd"
+    fi
+
+    local sock="/tmp/conduit-ssh-${label}.sock"
+
+    if [ "$auth_type" = "pass" ]; then
+        # If ControlMaster socket is alive, reuse it (skip sshpass + decrypt)
+        if [ -S "$sock" ] && ssh -O check -o "ControlPath=$sock" dummy 2>/dev/null; then
+            ssh -o ControlMaster=auto \
+                -o "ControlPath=$sock" \
+                -o ControlPersist=300 \
+                -o ConnectTimeout=5 \
+                -o StrictHostKeyChecking=accept-new \
+                -p "$ssh_port" \
+                "$ssh_host" \
+                "$remote_cmd"
+        else
+            if ! command -v sshpass &>/dev/null; then
+                echo "ERROR: sshpass not installed (required for password auth)" >&2
+                return 1
+            fi
+            local _pw
+            _pw=$(_load_cred "$label")
+            if [ -z "$_pw" ]; then
+                echo "ERROR: No stored password for '$label'" >&2
+                return 1
+            fi
+            SSHPASS="$_pw" sshpass -e \
+                ssh -o ControlMaster=auto \
+                    -o "ControlPath=$sock" \
+                    -o ControlPersist=300 \
+                    -o ConnectTimeout=5 \
+                    -o StrictHostKeyChecking=accept-new \
+                    -o PubkeyAuthentication=no \
+                    -p "$ssh_port" \
+                    "$ssh_host" \
+                    "$remote_cmd"
+        fi
+    else
+        ssh -o ControlMaster=auto \
+            -o "ControlPath=$sock" \
+            -o ControlPersist=300 \
+            -o ConnectTimeout=5 \
+            -o StrictHostKeyChecking=accept-new \
+            -o BatchMode=yes \
+            -p "$ssh_port" \
+            "$ssh_host" \
+            "$remote_cmd"
+    fi
+}
+
+ssh_cmd_bg() {
+    local label="$1"
+    local remote_cmd="$2"
+    local outfile="$3"
+    # 15s timeout to prevent hung servers from freezing dashboard
+    ssh_cmd "$label" "$remote_cmd" > "$outfile" 2>/dev/null &
+    local pid=$!
+    ( sleep 15 && kill $pid 2>/dev/null ) &
+    local tpid=$!
+    wait $pid 2>/dev/null
+    kill $tpid 2>/dev/null
+    wait $tpid 2>/dev/null
+}
+
+ssh_close_all() {
+    for sock in /tmp/conduit-ssh-*.sock; do
+        [ -e "$sock" ] && ssh -O exit -o "ControlPath=$sock" dummy 2>/dev/null || true
+    done
+}
+
+json_str() {
+    local key="$1" raw="$2"
+    local val
+    val=$(echo "$raw" | sed -n "s/.*\"${key}\":\"\([^\"]*\)\".*/\1/p")
+    echo "${val:--}"
+}
+json_num() {
+    local key="$1" raw="$2"
+    local val
+    val=$(echo "$raw" | sed -n "s/.*\"${key}\":\([0-9]*\).*/\1/p")
+    echo "${val:-0}"
+}
+
+# _jparse: zero-fork JSON parser via printf -v
+# Usage: _jparse "VARNAME" "json_key" "$json_string" "s|n"
+_jparse() {
+    local _var="$1" _k="$2" _j="$3" _t="${4:-s}"
+    local _r="${_j#*\"${_k}\":}"
+    if [ "$_r" = "$_j" ]; then
+        # Key not found
+        [ "$_t" = "s" ] && printf -v "$_var" '%s' "-" || printf -v "$_var" '%s' "0"
+        return
+    fi
+    if [ "$_t" = "s" ]; then
+        _r="${_r#\"}"
+        _r="${_r%%\"*}"
+        [ -z "$_r" ] && _r="-"
+    else
+        _r="${_r%%[,\}]*}"
+        _r="${_r//[!0-9]/}"
+        [ -z "$_r" ] && _r="0"
+    fi
+    printf -v "$_var" '%s' "$_r"
+}
+
+# _fmt_bytes: zero-fork byte formatter via printf -v
+_fmt_bytes() {
+    local _var="$1" _b="${2:-0}"
+    if [ -z "$_b" ] || [ "$_b" -eq 0 ] 2>/dev/null; then
+        printf -v "$_var" '0 B'
+        return
+    fi
+    if [ "$_b" -ge 1099511627776 ] 2>/dev/null; then
+        local _w=$((_b / 1099511627776))
+        local _f=$(( (_b % 1099511627776) * 100 / 1099511627776 ))
+        printf -v "$_var" '%d.%02d TB' "$_w" "$_f"
+    elif [ "$_b" -ge 1073741824 ] 2>/dev/null; then
+        local _w=$((_b / 1073741824))
+        local _f=$(( (_b % 1073741824) * 100 / 1073741824 ))
+        printf -v "$_var" '%d.%02d GB' "$_w" "$_f"
+    elif [ "$_b" -ge 1048576 ] 2>/dev/null; then
+        local _w=$((_b / 1048576))
+        local _f=$(( (_b % 1048576) * 100 / 1048576 ))
+        printf -v "$_var" '%d.%02d MB' "$_w" "$_f"
+    elif [ "$_b" -ge 1024 ] 2>/dev/null; then
+        local _w=$((_b / 1024))
+        local _f=$(( (_b % 1024) * 100 / 1024 ))
+        printf -v "$_var" '%d.%02d KB' "$_w" "$_f"
+    else
+        printf -v "$_var" '%s B' "$_b"
+    fi
+}
+
+show_multi_dashboard() {
+    load_servers
+
+    local stop_dash=0
+    local _md_cleanup=""
+    local _bd_cleanup=""
+    _dash_cleanup() {
+        stop_dash=1
+        [ -n "$_md_cleanup" ] && [ -d "$_md_cleanup" ] && rm -rf "$_md_cleanup"
+        [ -n "$_bd_cleanup" ] && [ -d "$_bd_cleanup" ] && rm -rf "$_bd_cleanup"
+    }
+    trap '_dash_cleanup' SIGINT SIGTERM SIGHUP SIGQUIT
+
+    tput smcup 2>/dev/null || true
+    echo -ne "\033[?25l"
+    clear
+
+    local EL="\033[K"
+    local last_refresh=0
+    local cycle_start=$SECONDS
+    local REFRESH_INTERVAL=20
+    local si key
+
+    declare -a SRV_STATUS SRV_CTOTAL SRV_RUNNING SRV_PEERS SRV_CING
+    declare -a SRV_UP_B SRV_DN_B
+    declare -a SRV_CPU SRV_RAM SRV_TEMP SRV_UPTIME SRV_RAW
+    declare -a SRV_DATA_H SRV_DATA_B SRV_UIPS
+
+    local L_STATUS="-" L_HOSTNAME="-" L_CTOTAL="0" L_RUNNING="0"
+    local L_PEERS="0" L_CING="0" L_UP_B="0" L_DN_B="0"
+    local L_CPU="-" L_RAM="-"
+    local L_RAM_TOTAL="-" L_TEMP="-" L_UPTIME="-"
+    local L_DATA_BYTES="0" L_UNIQUE_IPS="0"
+
+    local g_peers=0 g_ctotal=0 g_running=0 g_up=0 g_dn=0
+    local g_data_bytes=0 g_ips=0
+
+    while [ $stop_dash -eq 0 ]; do
+        local now=$SECONDS
+        local cycle_elapsed=$(( (now - cycle_start) % REFRESH_INTERVAL ))
+        local time_left=$((REFRESH_INTERVAL - cycle_elapsed))
+
+        # === DATA FETCH ===
+        if [ $((now - last_refresh)) -ge $REFRESH_INTERVAL ] || [ "$last_refresh" -eq 0 ]; then
+            last_refresh=$now
+            cycle_start=$now
+
+            local _md=$(mktemp -d /tmp/.conduit_md.XXXXXX)
+            _md_cleanup="$_md"
+
+            # Fetch local + all remote servers in parallel
+            status_json > "$_md/local" 2>/dev/null &
+            for ((si=0; si<SERVER_COUNT; si++)); do
+                ssh_cmd_bg "${SERVER_LABELS[$si]}" "conduit status --json" "$_md/srv_$si" &
+            done
+            wait
+
+            # Reset totals
+            g_peers=0; g_ctotal=0; g_running=0; g_up=0; g_dn=0; g_data_bytes=0; g_ips=0
+
+            # Parse local server data
+            local lraw=""
+            [ -f "$_md/local" ] && lraw=$(<"$_md/local")
+            if [ -n "$lraw" ] && [[ "$lraw" == *'"status"'* ]]; then
+                _jparse L_STATUS    "status"         "$lraw" s
+                _jparse L_HOSTNAME  "hostname"       "$lraw" s
+                _jparse L_CTOTAL    "total"          "$lraw" n
+                _jparse L_RUNNING   "running"        "$lraw" n
+                _jparse L_PEERS     "connected"      "$lraw" n
+                _jparse L_CING      "connecting"     "$lraw" n
+                _jparse L_UP_B      "tracker_out_bytes" "$lraw" n
+                _jparse L_DN_B      "tracker_in_bytes"  "$lraw" n
+                _jparse L_CPU       "sys_cpu"        "$lraw" s
+                _jparse L_RAM       "sys_ram_used"   "$lraw" s
+                _jparse L_RAM_TOTAL "sys_ram_total"  "$lraw" s
+                _jparse L_TEMP      "sys_temp"       "$lraw" s
+                _jparse L_UPTIME    "uptime"         "$lraw" s
+                _jparse L_DATA_BYTES  "data_served_bytes" "$lraw" n
+                _jparse L_UNIQUE_IPS  "unique_ips"        "$lraw" n
+            else
+                L_STATUS="offline"; L_HOSTNAME="-"; L_CTOTAL="0"; L_RUNNING="0"
+                L_PEERS="0"; L_CING="0"; L_UP_B="0"; L_DN_B="0"; L_CPU="-"; L_RAM="-"
+                L_RAM_TOTAL="-"; L_TEMP="-"; L_UPTIME="-"
+                L_DATA_BYTES="0"; L_UNIQUE_IPS="0"
+            fi
+
+            # Add local to totals
+            g_peers=$((g_peers + ${L_PEERS:-0}))
+            g_ctotal=$((g_ctotal + ${L_CTOTAL:-0}))
+            g_running=$((g_running + ${L_RUNNING:-0}))
+            g_up=$((g_up + ${L_UP_B:-0}))
+            g_dn=$((g_dn + ${L_DN_B:-0}))
+            g_data_bytes=$((g_data_bytes + ${L_DATA_BYTES:-0}))
+            g_ips=$((g_ips + ${L_UNIQUE_IPS:-0}))
+
+            # Parse remote server results
+            for ((si=0; si<SERVER_COUNT; si++)); do
+                local raw=""
+                [ -f "$_md/srv_$si" ] && raw=$(<"$_md/srv_$si")
+                SRV_RAW[$si]="$raw"
+
+                if [ -n "$raw" ] && [[ "$raw" == *'"status"'* ]]; then
+                    _jparse "SRV_STATUS[$si]"  "status"         "$raw" s
+                    _jparse "SRV_CTOTAL[$si]"  "total"          "$raw" n
+                    _jparse "SRV_RUNNING[$si]" "running"        "$raw" n
+                    _jparse "SRV_PEERS[$si]"   "connected"      "$raw" n
+                    _jparse "SRV_CING[$si]"    "connecting"     "$raw" n
+                    _jparse "SRV_UP_B[$si]"    "tracker_out_bytes" "$raw" n
+                    _jparse "SRV_DN_B[$si]"    "tracker_in_bytes"  "$raw" n
+                    _jparse "SRV_CPU[$si]"     "sys_cpu"        "$raw" s
+                    _jparse "SRV_TEMP[$si]"    "sys_temp"       "$raw" s
+                    _jparse "SRV_RAM[$si]"     "sys_ram_used"   "$raw" s
+                    _jparse "SRV_UPTIME[$si]"  "uptime"         "$raw" s
+                    _jparse "SRV_DATA_H[$si]" "data_served_human" "$raw" s
+                    _jparse "SRV_DATA_B[$si]" "data_served_bytes" "$raw" n
+                    _jparse "SRV_UIPS[$si]"   "unique_ips"        "$raw" n
+
+                    g_peers=$((g_peers + ${SRV_PEERS[$si]:-0}))
+                    g_ctotal=$((g_ctotal + ${SRV_CTOTAL[$si]:-0}))
+                    g_running=$((g_running + ${SRV_RUNNING[$si]:-0}))
+                    g_up=$((g_up + ${SRV_UP_B[$si]:-0}))
+                    g_dn=$((g_dn + ${SRV_DN_B[$si]:-0}))
+                    g_data_bytes=$((g_data_bytes + ${SRV_DATA_B[$si]:-0}))
+                    g_ips=$((g_ips + ${SRV_UIPS[$si]:-0}))
+                else
+                    SRV_STATUS[$si]="offline"
+                    SRV_CTOTAL[$si]="0"
+                    SRV_RUNNING[$si]="0"
+                    SRV_PEERS[$si]="0"
+                    SRV_CING[$si]="0"
+                    SRV_UP_B[$si]="0"
+                    SRV_DN_B[$si]="0"
+                    SRV_CPU[$si]="-"
+                    SRV_TEMP[$si]="-"
+                    SRV_RAM[$si]="-"
+                    SRV_UPTIME[$si]="-"
+                    SRV_DATA_H[$si]="-"
+                    SRV_DATA_B[$si]="0"
+                    SRV_UIPS[$si]="0"
+                fi
+            done
+            rm -rf "$_md"
+            _md_cleanup=""
+        fi
+
+        printf "\033[H"
+
+        local _hbar _hrest
+        printf -v _hbar '%*s' "$cycle_elapsed" ''; _hbar="${_hbar// /●}"
+        printf -v _hrest '%*s' "$time_left" ''; _hrest="${_hrest// /○}"
+        _hbar+="$_hrest"
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}${EL}"
+        printf "${CYAN}║${NC}  ${BOLD}CONDUIT MULTI-SERVER DASHBOARD${NC}%*s${YELLOW}[%s]${NC} %2ds  ${GREEN}[LIVE]${NC}\033[80G${CYAN}║${NC}${EL}\n" 10 "" "$_hbar" "$time_left"
+        echo -e "${CYAN}╠══════════════════════════════════════════════════════════════════════════════╣${NC}${EL}"
+
+        local l_sc l_sd
+        case "$L_STATUS" in
+            running)  l_sc="${GREEN}"; l_sd="● OK  " ;;
+            degraded) l_sc="${YELLOW}"; l_sd="● WARN" ;;
+            stopped)  l_sc="${RED}"; l_sd="● STOP" ;;
+            *)        l_sc="${RED}"; l_sd="● DOWN" ;;
+        esac
+        printf "${CYAN}║${NC}  ${BOLD}★ LOCAL${NC} %-14.14s %b%-6s${NC} │ %3s/%-3s ctr %4s peers │ CPU ${YELLOW}%-6.6s${NC}  ${CYAN}%-5.5s${NC}\033[80G${CYAN}║${NC}${EL}\n" \
+            "$L_HOSTNAME" "$l_sc" "$l_sd" \
+            "$L_RUNNING" "$L_CTOTAL" "$L_PEERS" "$L_CPU" "$L_TEMP"
+        local _trk_h="-"
+        [ "${L_DATA_BYTES:-0}" -gt 0 ] 2>/dev/null && _fmt_bytes _trk_h "$L_DATA_BYTES"
+        printf "${CYAN}║${NC}  Srvd ${GREEN}%-10.10s${NC} │ Uptime ${CYAN}%-11.11s${NC}\033[80G${CYAN}║${NC}${EL}\n" \
+            "$_trk_h" "$L_UPTIME"
+
+        echo -e "${CYAN}╠══════════════════════════════════════════════════════════════════════════════╣${NC}${EL}"
+
+        local g_up_h g_dn_h g_data_h
+        _fmt_bytes g_up_h "$g_up"
+        _fmt_bytes g_dn_h "$g_dn"
+        _fmt_bytes g_data_h "$g_data_bytes"
+        local total_servers=$((SERVER_COUNT + 1))
+        local _t_trk="" _t_trk_c=""
+        if [ "${g_data_bytes:-0}" -gt 0 ] 2>/dev/null; then
+            local _t_try
+            printf -v _t_try "  TOTALS: %d svr │ %d/%d ctr │ %d peers │ ↑%s ↓%s │ Srvd %s IPs %s" \
+                "$total_servers" "$g_running" "$g_ctotal" "$g_peers" "$g_up_h" "$g_dn_h" "$g_data_h" "$g_ips"
+            if [ ${#_t_try} -le 78 ]; then
+                _t_trk=" │ Srvd ${g_data_h} IPs ${g_ips}"
+                _t_trk_c=" │ Srvd ${CYAN}${g_data_h}${NC} IPs ${CYAN}${g_ips}${NC}"
+            else
+                _t_trk=" │ Srvd ${g_data_h}"
+                _t_trk_c=" │ Srvd ${CYAN}${g_data_h}${NC}"
+            fi
+        fi
+        printf "${CYAN}║${NC}  TOTALS: ${GREEN}%d${NC} svr │ ${GREEN}%d${NC}/%d ctr │ ${GREEN}%d${NC} peers │ ↑${CYAN}%s${NC} ↓${CYAN}%s${NC}%b\033[80G${CYAN}║${NC}${EL}\n" \
+            "$total_servers" "$g_running" "$g_ctotal" "$g_peers" "$g_up_h" "$g_dn_h" "$_t_trk_c"
+
+        if [ "$SERVER_COUNT" -gt 0 ]; then
+            echo -e "${CYAN}╠══╤════════════╤════════╤═════════╤══════════╤══════════╤═══════════╤═════════╣${NC}${EL}"
+            printf "${CYAN}║${NC}${BOLD}# │ SERVER     │ STATUS │ CNT/PER │ UPLOAD   │ DNLOAD   │ CPU(TEMP) │ SERVED  ${NC}\033[80G${CYAN}║${NC}${EL}\n"
+            echo -e "${CYAN}╠══╪════════════╪════════╪═════════╪══════════╪══════════╪═══════════╪═════════╣${NC}${EL}"
+
+            for ((si=0; si<SERVER_COUNT; si++)); do
+                local num=$((si + 1))
+                local label="${SERVER_LABELS[$si]}"
+                local st="${SRV_STATUS[$si]}"
+                local sc sd
+
+                case "$st" in
+                    running)  sc="${GREEN}"; sd="● OK  " ;;
+                    degraded) sc="${YELLOW}"; sd="● WARN" ;;
+                    stopped)  sc="${RED}"; sd="● STOP" ;;
+                    offline)  sc="${RED}"; sd="● DOWN" ;;
+                    *)        sc="${DIM}"; sd="  N/A " ;;
+                esac
+
+                local ctnr_peer="${SRV_RUNNING[$si]}/${SRV_PEERS[$si]}"
+                local _srv_up_h; _fmt_bytes _srv_up_h "${SRV_UP_B[$si]:-0}"
+                local _srv_dn_h; _fmt_bytes _srv_dn_h "${SRV_DN_B[$si]:-0}"
+                local cpu="${SRV_CPU[$si]}"
+                local temp="${SRV_TEMP[$si]}"
+                local cpu_temp="$cpu"
+                if [ "$temp" != "-" ]; then
+                    local temp_num="${temp%%°*}"
+                    cpu_temp="${cpu}(${temp_num})"
+                fi
+                local served="${SRV_DATA_H[$si]:-"-"}"
+
+                printf "${CYAN}║${NC}%d │ %-10.10s │ %b%-6s${NC} │ %-7.7s │ %-8.8s │ %-8.8s │ %-9s │ %-7.7s\033[80G${CYAN}║${NC}${EL}\n" \
+                    "$num" "$label" "$sc" "$sd" \
+                    "$ctnr_peer" "$_srv_up_h" "$_srv_dn_h" "$cpu_temp" "$served"
+            done
+            echo -e "${CYAN}╚══╧════════════╧════════╧═════════╧══════════╧══════════╧═══════════╧═════════╝${NC}${EL}"
+        else
+            echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}${EL}"
+            printf " ${DIM}No remote servers. Add with: conduit add-server${NC}${EL}\n"
+        fi
+
+        printf " ${DIM}[q]${NC}Quit ${DIM}[r]${NC}Refresh ${DIM}[1-9]${NC}Server ${DIM}[R]${NC}estart ${DIM}[S]${NC}top ${DIM}[T]${NC}start ${DIM}[U]${NC}pdate ${DIM}[M]${NC}anage${EL}\n"
+        printf " Enter choice: "
+        printf "\033[J"
+        echo -ne "\033[?25h"
+
+        # Keypress handling
+        if read -t 1 -n 1 -s key < /dev/tty 2>/dev/null; then
+            echo -ne "\033[?25l"
+            case "$key" in
+                q|Q) stop_dash=1 ;;
+                r)   last_refresh=0 ;;
+                R)   [ "$SERVER_COUNT" -gt 0 ] && { _bulk_action_all "restart"; last_refresh=0; } ;;
+                S)   [ "$SERVER_COUNT" -gt 0 ] && { _bulk_action_all "stop"; last_refresh=0; } ;;
+                T)   [ "$SERVER_COUNT" -gt 0 ] && { _bulk_action_all "start"; last_refresh=0; } ;;
+                U)   [ "$SERVER_COUNT" -gt 0 ] && { _bulk_action_all "update"; last_refresh=0; } ;;
+                M|m) _dashboard_server_mgmt; last_refresh=0 ;;
+                [1-9])
+                    local idx=$((key - 1))
+                    if [ "$idx" -lt "$SERVER_COUNT" ]; then
+                        _server_actions "$idx"
+                        last_refresh=0
+                    fi
+                    ;;
+            esac
+        fi
+        echo -ne "\033[?25l"
+    done
+
+    echo -ne "\033[?25h"
+    tput rmcup 2>/dev/null || true
+    ssh_close_all
+    trap - SIGINT SIGTERM SIGHUP SIGQUIT
+}
+
+_dashboard_server_mgmt() {
+    # Exit TUI temporarily
+    echo -ne "\033[?25h"
+    tput rmcup 2>/dev/null || true
+
+    local mgmt_key _mi
+    while true; do
+        clear
+        echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+        echo -e "  ${BOLD}SERVER MANAGEMENT${NC}"
+        echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        if [ ${#SERVER_LABELS[@]} -gt 0 ]; then
+            echo -e "  ${BOLD}Current servers:${NC}"
+            for _mi in "${!SERVER_LABELS[@]}"; do
+                echo -e "    $((_mi+1)). ${SERVER_LABELS[$_mi]} (${SERVER_CONNS[$_mi]})"
+            done
+        else
+            echo -e "  ${DIM}No remote servers configured${NC}"
+        fi
+        echo ""
+        echo -e "  ${GREEN}[a]${NC} Add server"
+        echo -e "  ${GREEN}[e]${NC} Edit server"
+        echo -e "  ${GREEN}[r]${NC} Remove server"
+        echo -e "  ${GREEN}[b]${NC} Back to dashboard"
+        echo ""
+        read -n 1 -s -p "  Choose: " mgmt_key < /dev/tty || break
+
+        case "$mgmt_key" in
+            a|A)
+                echo ""
+                if [ ${#SERVER_LABELS[@]} -ge 9 ]; then
+                    echo -e "  ${YELLOW}⚠ Maximum 9 servers reached${NC}"
+                    sleep 2
+                else
+                    add_server_interactive
+                    load_servers
+                    SERVER_COUNT=${#SERVER_LABELS[@]}
+                fi
+                ;;
+            e|E)
+                echo ""
+                if [ ${#SERVER_LABELS[@]} -eq 0 ]; then
+                    echo -e "  ${YELLOW}No servers to edit${NC}"
+                    sleep 1
+                else
+                    edit_server_interactive
+                    load_servers
+                    SERVER_COUNT=${#SERVER_LABELS[@]}
+                fi
+                ;;
+            r|R)
+                echo ""
+                if [ ${#SERVER_LABELS[@]} -eq 0 ]; then
+                    echo -e "  ${YELLOW}No servers to remove${NC}"
+                    sleep 1
+                else
+                    remove_server_interactive
+                    load_servers
+                    SERVER_COUNT=${#SERVER_LABELS[@]}
+                fi
+                ;;
+            b|B|"") break ;;
+        esac
+    done
+
+    # Re-enter TUI
+    tput smcup 2>/dev/null || true
+    echo -ne "\033[?25l"
+}
+
+_server_actions() {
+    local idx=$1
+    local label="${SERVER_LABELS[$idx]}"
+    local conn="${SERVER_CONNS[$idx]}"
+
+    echo -ne "\033[?25h"
+    clear
+
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${BOLD}SERVER: ${GREEN}${label}${NC}  (${conn})"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  1. 🔁 Restart Conduit"
+    echo -e "  2. ⏹️  Stop Conduit"
+    echo -e "  3. ▶️  Start Conduit"
+    echo -e "  4. 🔄 Update Conduit"
+    echo -e "  5. 🩺 Health Check"
+    echo -e "  6. 📋 View Logs (last 50 lines)"
+    echo -e "  7. 📊 Quick Status"
+    echo ""
+    echo -e "  ${DIM}[b] Back to dashboard${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    read -p "  Enter choice: " choice < /dev/tty || { echo -ne "\033[?25l"; clear; return; }
+
+    local remote_cmd=""
+    case "$choice" in
+        1) remote_cmd="conduit restart" ;;
+        2) remote_cmd="conduit stop" ;;
+        3) remote_cmd="conduit start" ;;
+        4) remote_cmd="conduit update" ;;
+        5) remote_cmd="conduit health" ;;
+        6) remote_cmd="conduit logs" ;;
+        7) remote_cmd="conduit status" ;;
+        b|B|"") echo -ne "\033[?25l"; clear; return ;;
+        *) echo -e "${RED}  Invalid choice.${NC}"; sleep 1; echo -ne "\033[?25l"; clear; return ;;
+    esac
+
+    echo ""
+    echo -e "  ${CYAN}Executing on ${label}...${NC}"
+    echo -e "${CYAN}──────────────────────────────────────────────────────────────${NC}"
+    echo ""
+
+    # Run with 60s timeout to prevent hung servers from freezing the TUI
+    ssh_cmd "$label" "$remote_cmd" 2>&1 &
+    local _cmd_pid=$!
+    ( sleep 60 && kill $_cmd_pid 2>/dev/null ) &
+    local _timer_pid=$!
+    wait $_cmd_pid 2>/dev/null
+    local _cmd_rc=$?
+    kill $_timer_pid 2>/dev/null
+    wait $_timer_pid 2>/dev/null
+    [ "$_cmd_rc" -eq 143 ] && echo -e "\n  ${YELLOW}⚠ Command timed out after 60s.${NC}"
+
+    echo ""
+    echo -e "${CYAN}──────────────────────────────────────────────────────────────${NC}"
+    read -n 1 -s -r -p "  Press any key to return to dashboard..." < /dev/tty || true
+
+    echo -ne "\033[?25l"
+    clear
+}
+
+_bulk_action_all() {
+    local action="$1"
+    local action_display
+
+    case "$action" in
+        restart) action_display="Restarting" ;;
+        stop)    action_display="Stopping" ;;
+        start)   action_display="Starting" ;;
+        update)  action_display="Updating" ;;
+        *)       return ;;
+    esac
+
+    echo -ne "\033[?25h"
+    clear
+
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${BOLD}BULK ACTION: ${YELLOW}${action_display} all servers${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+
+    load_servers
+
+    read -p "  ${action_display} all ${SERVER_COUNT} remote servers? (y/n): " confirm < /dev/tty || { echo -ne "\033[?25l"; return; }
+    [[ "$confirm" =~ ^[Yy]$ ]] || { echo -ne "\033[?25l"; return; }
+
+    echo ""
+
+    local _bd=$(mktemp -d /tmp/.conduit_bulk.XXXXXX)
+    _bd_cleanup="$_bd"
+    for si in $(seq 0 $((SERVER_COUNT - 1))); do
+        echo -e "  ${DIM}${action_display} ${SERVER_LABELS[$si]}...${NC}"
+        ssh_cmd_bg "${SERVER_LABELS[$si]}" "conduit $action" "$_bd/result_$si" &
+    done
+    wait
+
+    echo ""
+    echo -e "${CYAN}──────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${BOLD}RESULTS:${NC}"
+    echo ""
+    for si in $(seq 0 $((SERVER_COUNT - 1))); do
+        local label="${SERVER_LABELS[$si]}"
+        if [ -f "$_bd/result_$si" ] && [ -s "$_bd/result_$si" ]; then
+            echo -e "  ${GREEN}✓${NC} ${label}: OK"
+        else
+            echo -e "  ${RED}✗${NC} ${label}: FAILED (unreachable or error)"
+        fi
+    done
+    rm -rf "$_bd"
+    _bd_cleanup=""
+
+    echo ""
+    read -n 1 -s -r -p "  Press any key to return to dashboard..." < /dev/tty || true
+    echo -ne "\033[?25l"
+    clear
+}
+
+update_geoip() {
+    echo -e "${CYAN}═══ UPDATE GEOIP DATABASE ═══${NC}"
+    echo ""
+    local geoip_dir="/usr/share/GeoIP"
+    local geoip_file="$geoip_dir/GeoLite2-Country.mmdb"
+    local geoip_url="https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-Country.mmdb"
+
+    mkdir -p "$geoip_dir" 2>/dev/null
+    echo -e "Downloading GeoLite2-Country.mmdb..."
+    local tmp_mmdb="/tmp/GeoLite2-Country.mmdb.$$"
+    if curl -fsSL --max-time 60 --max-filesize 10485760 -o "$tmp_mmdb" "$geoip_url" 2>/dev/null; then
+        local fsize=$(stat -c %s "$tmp_mmdb" 2>/dev/null || stat -f %z "$tmp_mmdb" 2>/dev/null || echo 0)
+        if [ "$fsize" -gt 1048576 ] 2>/dev/null; then
+            mv "$tmp_mmdb" "$geoip_file"
+            chmod 644 "$geoip_file"
+            local fsize_mb=$(awk "BEGIN{printf \"%.1f\", $fsize/1048576}")
+            echo -e "${GREEN}✓ GeoIP database updated (${fsize_mb}MB)${NC}"
+        else
+            rm -f "$tmp_mmdb"
+            echo -e "${RED}✗ Downloaded file too small (${fsize} bytes), possibly corrupt${NC}"
+            return 1
+        fi
+    else
+        rm -f "$tmp_mmdb" 2>/dev/null
+        echo -e "${RED}✗ Failed to download GeoIP database${NC}"
+        return 1
+    fi
+}
+
 # Command line interface
 show_help() {
     echo "Usage: conduit [command]"
     echo ""
     echo "Commands:"
-    echo "  status    Show current status with resource usage"
-    echo "  stats     View live statistics"
-    echo "  logs      View raw Docker logs"
-    echo "  health    Run health check on Conduit container"
-    echo "  start     Start Conduit container"
-    echo "  stop      Stop Conduit container"
-    echo "  restart   Restart Conduit container"
-    echo "  update    Update to latest Conduit image"
-    echo "  settings  Change max-clients/bandwidth"
-    echo "  scale     Scale containers (1+)"
-    echo "  backup    Backup Conduit node identity key"
-    echo "  restore   Restore Conduit node identity from backup"
-    echo "  uninstall Remove everything (container, data, service)"
-    echo "  menu      Open interactive menu (default)"
-    echo "  version   Show version information"
-    echo "  about     About Psiphon Conduit"
-    echo "  info      Dashboard metrics explained"
-    echo "  help      Show this help"
+    echo "  status       Show current status (--json for machine-readable)"
+    echo "  stats        View live statistics"
+    echo "  logs         View raw Docker logs"
+    echo "  health       Run health check on Conduit container"
+    echo "  start        Start Conduit container"
+    echo "  stop         Stop Conduit container"
+    echo "  restart      Restart Conduit container"
+    echo "  update       Update to latest Conduit image"
+    echo "  settings     Change max-clients/bandwidth"
+    echo "  scale        Scale containers (1+)"
+    echo "  backup       Backup Conduit node identity key"
+    echo "  restore      Restore Conduit node identity from backup"
+    echo "  update-geoip Update GeoIP database"
+    echo "  dashboard    Open multi-server dashboard"
+    echo "  add-server   Add a remote server"
+    echo "  edit-server  Edit server credentials or connection"
+    echo "  remove-server Remove a configured remote server"
+    echo "  servers      List configured remote servers"
+    echo "  snowflake    Manage Snowflake proxy (status|start|stop|restart)"
+    echo "  uninstall    Remove everything (container, data, service)"
+    echo "  menu         Open interactive menu (default)"
+    echo "  version      Show version information"
+    echo "  about        About Psiphon Conduit"
+    echo "  info         Dashboard metrics explained"
+    echo "  help         Show this help"
 }
 
 show_version() {
@@ -6793,6 +9515,18 @@ show_version() {
         local actual=$(docker inspect --format='{{index .RepoDigests 0}}' "$CONDUIT_IMAGE" 2>/dev/null | grep -o 'sha256:[a-f0-9]*')
         if [ -n "$actual" ]; then
             echo "Running Digest:  ${actual}"
+        fi
+    fi
+
+    # Show Snowflake image info if enabled
+    if [ "${SNOWFLAKE_ENABLED:-false}" = "true" ]; then
+        echo ""
+        echo "Snowflake Image: ${SNOWFLAKE_IMAGE}"
+        if docker ps 2>/dev/null | grep -q "snowflake-proxy"; then
+            local sf_digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$SNOWFLAKE_IMAGE" 2>/dev/null | grep -o 'sha256:[a-f0-9]*')
+            if [ -n "$sf_digest" ]; then
+                echo "Running Digest:  ${sf_digest}"
+            fi
         fi
     fi
 }
@@ -6994,14 +9728,11 @@ backup_key() {
     echo -e "${CYAN}═══ BACKUP CONDUIT NODE KEY ═══${NC}"
     echo ""
 
-    # Create backup directory
     mkdir -p "$INSTALL_DIR/backups"
-
-    # Create timestamped backup
     local timestamp=$(date '+%Y%m%d_%H%M%S')
     local backup_file="$INSTALL_DIR/backups/conduit_key_${timestamp}.json"
 
-    # Try direct mountpoint access first, fall back to docker cp (Snap Docker)
+    # Direct mountpoint access, fall back to docker cp
     local mountpoint=$(docker volume inspect conduit-data --format '{{ .Mountpoint }}' 2>/dev/null)
 
     if [ -n "$mountpoint" ] && [ -f "$mountpoint/conduit_key.json" ]; then
@@ -7204,7 +9935,7 @@ update_conduit() {
             echo -e "  ${GREEN}✓ Downloaded v${new_version:-?} from GitHub${NC}"
             echo -e "  Installing..."
 
-            # Always install latest from GitHub (run new script's update-components)
+            # Install latest from GitHub
             bash "$tmp_script" --update-components
             local update_status=$?
             rm -f "$tmp_script"
@@ -7228,7 +9959,6 @@ update_conduit() {
     echo ""
     echo -e "${BOLD}Phase 2: Updating tracker service...${NC}"
     if [ "${TRACKER_ENABLED:-true}" = "true" ]; then
-        # Regenerate and restart tracker to pick up new code
         if command -v systemctl &>/dev/null; then
             systemctl restart conduit-tracker.service 2>/dev/null
             if systemctl is-active conduit-tracker.service &>/dev/null; then
@@ -7268,6 +9998,9 @@ update_conduit() {
         read -p "Recreate containers with new image now? [y/N]: " answer < /dev/tty || true
         if [[ "$answer" =~ ^[Yy]$ ]]; then
             recreate_containers
+            echo -e "${DIM}Cleaning up old Docker images...${NC}"
+            docker image prune -f >/dev/null 2>&1 || true
+            echo -e "${GREEN}✓ Old images cleaned up${NC}"
         else
             echo -e "${CYAN}Skipped. Containers will use the new image on next restart.${NC}"
         fi
@@ -7281,14 +10014,21 @@ update_conduit() {
 }
 
 case "${1:-menu}" in
-    status)   show_status ;;
+    status)
+        if [ "${2:-}" = "--json" ]; then
+            status_json
+        else
+            show_status
+        fi
+        ;;
     stats)    show_live_stats ;;
     logs)     show_logs ;;
     health)   health_check ;;
-    start)    start_conduit ;;
-    stop)     stop_conduit ;;
+    start)    start_conduit "${2:-}" ;;
+    stop)     stop_conduit "${2:-}" ;;
     restart)  restart_conduit ;;
     update)   update_conduit ;;
+    update-geoip) update_geoip ;;
     peers)    show_peers ;;
     settings) change_settings ;;
     backup)   backup_key ;;
@@ -7301,6 +10041,32 @@ case "${1:-menu}" in
     help|-h|--help) show_help ;;
     regen-tracker) setup_tracker_service 2>/dev/null ;;
     regen-telegram) [ "${TELEGRAM_ENABLED:-false}" = "true" ] && setup_telegram_service 2>/dev/null ;;
+    dashboard)     show_multi_dashboard ;;
+    add-server)    add_server_interactive ;;
+    edit-server)   edit_server_interactive ;;
+    remove-server) remove_server_interactive ;;
+    servers)       list_servers ;;
+    snowflake)
+        case "${2:-status}" in
+            status)  show_snowflake_status ;;
+            start)   if [ "$SNOWFLAKE_ENABLED" = "true" ]; then start_snowflake; else echo "Snowflake not enabled."; fi ;;
+            stop)    stop_snowflake ;;
+            restart) if [ "$SNOWFLAKE_ENABLED" = "true" ]; then restart_snowflake; else echo "Snowflake not enabled."; fi ;;
+            remove)
+                stop_snowflake
+                si=""
+                for si in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+                    docker rm -f "$(get_snowflake_name $si)" 2>/dev/null || true
+                    docker volume rm "$(get_snowflake_volume $si)" 2>/dev/null || true
+                done
+                SNOWFLAKE_ENABLED=false
+                SNOWFLAKE_COUNT=1
+                save_settings
+                echo "Snowflake removed."
+                ;;
+            *)       echo "Usage: conduit snowflake [status|start|stop|restart|remove]" ;;
+        esac
+        ;;
     menu|*)   show_menu ;;
 esac
 MANAGEMENT
@@ -7500,6 +10266,7 @@ main() {
                 grep -q "Type=simple" /etc/systemd/system/conduit.service 2>/dev/null && need_rewrite=true
                 grep -q "Restart=always" /etc/systemd/system/conduit.service 2>/dev/null && need_rewrite=true
                 grep -q "max-clients" /etc/systemd/system/conduit.service 2>/dev/null && need_rewrite=true
+                grep -q "conduit start$" /etc/systemd/system/conduit.service 2>/dev/null && need_rewrite=true
                 if [ "$need_rewrite" = true ]; then
                     # Overwrite file first, then reload to replace old Restart=always definition
                     cat > /etc/systemd/system/conduit.service << SVCEOF
@@ -7511,8 +10278,8 @@ Wants=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/bin/conduit start
-ExecStop=/usr/local/bin/conduit stop
+ExecStart=/usr/local/bin/conduit start --auto
+ExecStop=/usr/local/bin/conduit stop --auto
 
 [Install]
 WantedBy=multi-user.target
@@ -7538,10 +10305,8 @@ SVCEOF
     check_root
     detect_os
     
-    # Ensure all tools (including new ones like tcpdump) are present
     check_dependencies
-    
-    # Check if already installed
+
     while [ -f "$INSTALL_DIR/conduit" ] && [ "$FORCE_REINSTALL" != "true" ]; do
         echo -e "${GREEN}Conduit is already installed!${NC}"
         echo ""
@@ -7589,33 +10354,23 @@ SVCEOF
         esac
     done
 
-    # Interactive settings prompt (max-clients, bandwidth)
     prompt_settings
 
     echo ""
     echo -e "${CYAN}Starting installation...${NC}"
     echo ""
 
-    #───────────────────────────────────────────────────────────────
-    # Installation Steps (5 steps if backup exists, otherwise 4)
-    #───────────────────────────────────────────────────────────────
-
-    # Step 1: Install Docker (if not already installed)
     log_info "Step 1/5: Installing Docker..."
     install_docker
 
     echo ""
 
-    # Step 2: Check for and optionally restore backup keys
-    # This preserves node identity if user had a previous installation
     log_info "Step 2/5: Checking for previous node identity..."
     check_and_offer_backup_restore || true
 
     echo ""
 
-    # Step 3: Start Conduit container
     log_info "Step 3/5: Starting Conduit..."
-    # Clean up any existing Conduit containers from previous install/scaling (dynamic)
     docker ps -a --format '{{.Names}}' 2>/dev/null | while read -r name; do
         [[ "$name" =~ ^conduit(-[0-9]+)?$ ]] || continue
         docker stop "$name" 2>/dev/null || true
@@ -7625,7 +10380,6 @@ SVCEOF
     
     echo ""
 
-    # Step 4: Save settings and configure auto-start service
     log_info "Step 4/5: Setting up auto-start..."
     save_settings_install
     setup_autostart
@@ -7633,7 +10387,7 @@ SVCEOF
 
     echo ""
 
-    # Step 5: Create the 'conduit' CLI management script
+    # Create the 'conduit' CLI management script
     log_info "Step 5/5: Creating management script..."
     create_management_script
 
@@ -7645,7 +10399,7 @@ SVCEOF
     fi
 }
 #
-# REACHED END OF SCRIPT - VERSION 1.2.1
+# REACHED END OF SCRIPT - VERSION 1.3
 # ###############################################################################
 main "$@"
 
