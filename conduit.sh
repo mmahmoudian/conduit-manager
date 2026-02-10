@@ -10123,7 +10123,7 @@ case "${1:-menu}" in
             *)       echo "Usage: conduit snowflake [status|start|stop|restart|remove]" ;;
         esac
         ;;
-    menu|*)   show_menu ;;
+    menu|*)   [ -t 0 ] || { show_help; exit 0; }; show_menu ;;
 esac
 MANAGEMENT
 
