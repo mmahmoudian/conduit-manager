@@ -5642,6 +5642,8 @@ ${report}"
 }
 
 telegram_get_chat_id() {
+    # Clear any existing webhook so getUpdates works
+    curl -s --max-time 5 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteWebhook" &>/dev/null
     local response
     response=$(curl -s --max-time 10 --max-filesize 1048576 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates" 2>/dev/null)
     [ -z "$response" ] && return 1
