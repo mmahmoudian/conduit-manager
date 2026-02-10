@@ -10,7 +10,7 @@
                       M A N A G E R
 ```
 
-![Version](https://img.shields.io/badge/version-1.3-blue)
+![Version](https://img.shields.io/badge/version-1.3.1-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Linux-orange)
 ![Docker](https://img.shields.io/badge/Docker-Required-2496ED?logo=docker&logoColor=white)
@@ -22,11 +22,11 @@ A powerful management tool for deploying and managing Psiphon Conduit nodes on L
 
 | Main Menu | Live Dashboard |
 |:-:|:-:|
-| ![Main Menu](conduit-menu.png) | ![Live Stats](conduit-stats.png) |
+| ![Main Menu](screenshots/conduit-menu.png) | ![Live Stats](screenshots/conduit-stats.png) |
 
 | Live Map | Advanced Stats |
 |:-:|:-:|
-| ![Live Map](conduit-live-map.png) | ![Advanced Stats](conduit-advanced-stats.png) |
+| ![Live Map](screenshots/conduit-live-map.png) | ![Advanced Stats](screenshots/conduit-advanced-stats.png) |
 
 ## Quick Install
 
@@ -41,10 +41,19 @@ wget https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.s
 sudo bash conduit.sh
 ```
 
-## What's New in v1.3
+## What's New in v1.3.1
+
+- **Telegram MTProto Proxy** — Built-in MTProto proxy (mtg v2) with fake-TLS, share link & QR code, send to Telegram bot, resource configuration, and traffic monitoring
+- **Auto-Update Checker** — Background version check with update badge on menu, optional automatic updates every 48h via cron
+- **Multi-Server Dashboard Pagination** — Dashboard now supports 30 servers with page navigation (`[`/`]` keys), up from 9
+- **Remote Server Deployment** — Install and configure Conduit on remote servers directly from the dashboard
+- **MTProto in Status** — MTProxy status and traffic shown in the main live dashboard when enabled
+- **Update Concurrency Guard** — Prevents simultaneous manual + cron updates with flock advisory locking
+
+### v1.3
 
 - **Snowflake Proxy Integration** — Built-in Tor Snowflake proxy with dual-instance support, resource configuration, and traffic monitoring
-- **Multi-Server Dashboard** — Manage up to 9 remote servers from one TUI with live status, bulk actions, and per-server controls
+- **Multi-Server Dashboard** — Manage up to 30 remote servers from one TUI with live status, bulk actions, and per-server controls
 - **Remote Server Management** — Add, edit, and remove servers with SSH key or password authentication
 - **Encrypted Credential Storage** — AES-256-CBC encrypted password storage with automatic sshpass management
 - **Non-Root SSH Support** — Automatic sudo prefix for non-root remote users with passwordless sudo verification
@@ -62,7 +71,9 @@ sudo bash conduit.sh
 - **Multi-Distro Support** — Works on Ubuntu, Debian, CentOS, Fedora, Arch, Alpine, openSUSE
 - **Auto-Start on Boot** — Supports systemd, OpenRC, and SysVinit
 - **Snowflake Proxy** — Built-in Tor Snowflake proxy with dual-instance support and resource management
-- **Multi-Server Dashboard** — Manage up to 9 remote servers from one TUI with live refresh and bulk actions
+- **MTProto Proxy** — Telegram MTProto proxy (mtg v2) with fake-TLS, share link, QR code, and Telegram delivery
+- **Auto-Update** — Background version check with update badge, optional automatic updates every 48h via cron
+- **Multi-Server Dashboard** — Manage up to 30 remote servers from one TUI with live refresh, pagination, and bulk actions
 - **Remote Server Management** — SSH key and encrypted password authentication with ControlMaster persistent connections
 - **Live Dashboard** — Real-time stats with peak, average, CPU/RAM, temperature, and per-country breakdown
 - **Connection History** — Track client counts over time with 6h, 12h, 24h snapshots
@@ -120,7 +131,8 @@ conduit qr           # Show QR code to claim rewards via Ryve app
 conduit start        # Start all Conduit containers
 conduit stop         # Stop all Conduit containers
 conduit restart      # Restart all Conduit containers
-conduit update       # Update to the latest Conduit image
+conduit update       # Update script + Docker images (with auto-update toggle)
+conduit mtproto      # Manage MTProto proxy (status|start|stop|restart|remove)
 ```
 
 ### Configuration
@@ -155,9 +167,11 @@ The interactive menu (`conduit menu`) provides access to all features:
 | **5** | Start Conduit |
 | **6** | Stop Conduit |
 | **7** | Restart Conduit |
-| **8** | Update Conduit image |
+| **8** | Update Conduit — script + Docker images, auto-update toggle |
 | **9** | Settings & Tools — resource limits, QR code, backup, restore, health check, Telegram, uninstall |
 | **c** | Manage containers — add or remove containers (up to 5) |
+| **s** | Snowflake proxy — status, start/stop, resource configuration |
+| **p** | Telegram MTProto Proxy — setup, share link & QR, send to Telegram, resource config |
 | **a** | Advanced stats — top 5 charts for peers, download, upload, unique IPs |
 | **i** | Info & Help — multi-page guide explaining traffic, network, stats, peak/avg/history |
 | **0** | Exit |
@@ -253,11 +267,11 @@ Conduit node operators can earn OAT tokens for contributing to the Psiphon netwo
 
 | منوی اصلی | داشبورد زنده |
 |:-:|:-:|
-| ![منوی اصلی](conduit-menu.png) | ![آمار زنده](conduit-stats.png) |
+| ![منوی اصلی](screenshots/conduit-menu.png) | ![آمار زنده](screenshots/conduit-stats.png) |
 
 | نقشه زنده | آمار پیشرفته |
 |:-:|:-:|
-| ![نقشه زنده](conduit-live-map.png) | ![آمار پیشرفته](conduit-advanced-stats.png) |
+| ![نقشه زنده](screenshots/conduit-live-map.png) | ![آمار پیشرفته](screenshots/conduit-advanced-stats.png) |
 
 ## نصب سریع
 
@@ -274,10 +288,18 @@ wget https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.s
 sudo bash conduit.sh
 ```
 
-## تازه‌های نسخه 1.3
+## تازه‌های نسخه 1.3.1
+
+- **پروکسی MTProto تلگرام** — پروکسی MTProto (mtg v2) با fake-TLS، لینک اشتراک‌گذاری و QR کد، ارسال به ربات تلگرام، پیکربندی منابع و مانیتورینگ ترافیک
+- **بررسی خودکار به‌روزرسانی** — بررسی نسخه در پس‌زمینه با نشان به‌روزرسانی در منو، به‌روزرسانی خودکار اختیاری هر ۴۸ ساعت
+- **صفحه‌بندی داشبورد** — داشبورد چند سرور حالا تا ۳۰ سرور با ناوبری صفحه پشتیبانی می‌کند
+- **نصب ریموت** — نصب و پیکربندی کاندوییت روی سرورهای ریموت مستقیماً از داشبورد
+- **MTProto در وضعیت** — نمایش وضعیت و ترافیک MTProxy در داشبورد اصلی
+
+### نسخه 1.3
 
 - **پروکسی اسنوفلیک** — پروکسی Snowflake تور با پشتیبانی دو نمونه، پیکربندی منابع و مانیتورینگ ترافیک
-- **داشبورد چند سرور** — مدیریت تا ۹ سرور ریموت از یک صفحه با وضعیت زنده، عملیات گروهی و کنترل هر سرور
+- **داشبورد چند سرور** — مدیریت تا ۳۰ سرور ریموت از یک صفحه با وضعیت زنده، عملیات گروهی و کنترل هر سرور
 - **مدیریت سرور ریموت** — اضافه، ویرایش و حذف سرور با احراز هویت کلید SSH یا رمز عبور
 - **ذخیره رمزنگاری‌شده اعتبارنامه** — رمزنگاری AES-256-CBC برای رمز عبور با مدیریت خودکار sshpass
 - **پشتیبانی SSH غیر root** — افزودن خودکار sudo برای کاربران غیر root با تأیید sudo بدون رمز
@@ -295,7 +317,9 @@ sudo bash conduit.sh
 - **پشتیبانی از توزیع‌های مختلف** — اوبونتو، دبیان، سنت‌اواس، فدورا، آرچ، آلپاین، اوپن‌سوزه
 - **راه‌اندازی خودکار** — پس از ریستارت سرور، سرویس به صورت خودکار اجرا می‌شود
 - **پروکسی اسنوفلیک** — پروکسی Snowflake تور با پشتیبانی دو نمونه و مدیریت منابع
-- **داشبورد چند سرور** — مدیریت تا ۹ سرور ریموت با رفرش زنده و عملیات گروهی
+- **پروکسی MTProto** — پروکسی MTProto تلگرام (mtg v2) با fake-TLS، لینک اشتراک‌گذاری، QR کد و ارسال به تلگرام
+- **به‌روزرسانی خودکار** — بررسی نسخه در پس‌زمینه با نشان به‌روزرسانی، به‌روزرسانی خودکار اختیاری هر ۴۸ ساعت
+- **داشبورد چند سرور** — مدیریت تا ۳۰ سرور ریموت با رفرش زنده، صفحه‌بندی و عملیات گروهی
 - **مدیریت سرور ریموت** — احراز هویت کلید SSH و رمز عبور رمزنگاری‌شده با اتصال پایدار ControlMaster
 - **داشبورد زنده** — نمایش لحظه‌ای پیک، میانگین، CPU، RAM، دما و تفکیک کشوری
 - **تاریخچه اتصال** — ردیابی تعداد کلاینت‌ها با اسنپ‌شات ۶، ۱۲ و ۲۴ ساعته
@@ -341,7 +365,8 @@ conduit qr           # نمایش QR کد برای دریافت پاداش از 
 conduit start        # شروع تمام کانتینرها
 conduit stop         # توقف تمام کانتینرها
 conduit restart      # ریستارت تمام کانتینرها
-conduit update       # به‌روزرسانی به آخرین نسخه
+conduit update       # به‌روزرسانی اسکریپت + ایمیج‌های داکر (با تنظیم به‌روزرسانی خودکار)
+conduit mtproto      # مدیریت پروکسی MTProto (وضعیت|شروع|توقف|ریستارت|حذف)
 ```
 
 ### پیکربندی
@@ -374,9 +399,11 @@ conduit help         # راهنما
 | **5** | شروع کاندوییت |
 | **6** | توقف کاندوییت |
 | **7** | ریستارت کاندوییت |
-| **8** | به‌روزرسانی ایمیج و اسکریپت |
+| **8** | به‌روزرسانی — اسکریپت + ایمیج‌های داکر، تنظیم به‌روزرسانی خودکار |
 | **9** | تنظیمات و ابزارها — محدودیت منابع، QR کد، پشتیبان‌گیری، بازیابی، تلگرام، حذف نصب |
 | **c** | مدیریت کانتینرها — اضافه یا حذف (تا ۵) |
+| **s** | پروکسی اسنوفلیک — وضعیت، شروع/توقف، پیکربندی منابع |
+| **p** | پروکسی MTProto تلگرام — راه‌اندازی، اشتراک لینک و QR، ارسال به تلگرام |
 | **a** | آمار پیشرفته — نمودار برترین کشورها |
 | **i** | راهنما — توضیحات ترافیک، شبکه، آمار، پیک/میانگین/تاریخچه |
 | **0** | خروج |

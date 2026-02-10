@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║     🚀 PSIPHON CONDUIT MANAGER v1.3                               ║
+# ║     🚀 PSIPHON CONDUIT MANAGER v1.3.1                             ║
 # ║                                                                   ║
 # ║  One-click setup for Psiphon Conduit                              ║
 # ║                                                                   ║
@@ -31,11 +31,12 @@ if [ -z "$BASH_VERSION" ]; then
     exit 1
 fi
 
-VERSION="1.3"
+VERSION="1.3.1"
 CONDUIT_IMAGE="ghcr.io/ssmirr/conduit/conduit:latest"
 INSTALL_DIR="${INSTALL_DIR:-/opt/conduit}"
 BACKUP_DIR="$INSTALL_DIR/backups"
 FORCE_REINSTALL=false
+BATCH_MODE=false
 
 # Colors
 RED='\033[0;31m'
@@ -55,7 +56,7 @@ NC='\033[0m'
 print_header() {
     echo -e "${CYAN}"
     echo "╔═══════════════════════════════════════════════════════════════════╗"
-    echo "║                🚀 PSIPHON CONDUIT MANAGER v${VERSION}                    ║"
+    echo "║                🚀 PSIPHON CONDUIT MANAGER v${VERSION}                  ║"
     echo "╠═══════════════════════════════════════════════════════════════════╣"
     echo "║  Help users access the open internet during shutdowns             ║"
     echo "╚═══════════════════════════════════════════════════════════════════╝"
@@ -358,6 +359,34 @@ get_container_memory() {
 #═══════════════════════════════════════════════════════════════════════
 
 prompt_settings() {
+  # Batch mode: use env vars or compute smart defaults, no prompts
+  if [ "$BATCH_MODE" = "true" ]; then
+    local recommended=$(calculate_recommended_clients)
+    MAX_CLIENTS=${MAX_CLIENTS:-$recommended}
+    # Validate MAX_CLIENTS (1-1000)
+    if ! [[ "$MAX_CLIENTS" =~ ^[0-9]+$ ]] || [ "$MAX_CLIENTS" -lt 1 ] || [ "$MAX_CLIENTS" -gt 1000 ]; then
+        MAX_CLIENTS=$recommended
+    fi
+    BANDWIDTH=${BANDWIDTH:-5}
+    # Validate BANDWIDTH (1-40 or -1)
+    if ! [[ "$BANDWIDTH" =~ ^-?[0-9]+$ ]] || { [ "$BANDWIDTH" -ne -1 ] && { [ "$BANDWIDTH" -lt 1 ] || [ "$BANDWIDTH" -gt 40 ]; }; }; then
+        BANDWIDTH=5
+    fi
+    local cpu_cores=$(get_cpu_cores)
+    local ram_mb=$(get_ram_mb)
+    local ram_gb=$(( ram_mb / 1024 ))
+    [ "$ram_gb" -lt 1 ] && ram_gb=1
+    local rec=$(( cpu_cores < ram_gb ? cpu_cores : ram_gb ))
+    [ "$rec" -lt 1 ] && rec=1
+    [ "$rec" -gt 32 ] && rec=32
+    CONTAINER_COUNT=${CONTAINER_COUNT:-$rec}
+    # Validate CONTAINER_COUNT (1-32)
+    if ! [[ "$CONTAINER_COUNT" =~ ^[0-9]+$ ]] || [ "$CONTAINER_COUNT" -lt 1 ] || [ "$CONTAINER_COUNT" -gt 32 ]; then
+        CONTAINER_COUNT=$rec
+    fi
+    log_info "Batch mode: ${CONTAINER_COUNT} containers, max-clients=${MAX_CLIENTS}, bandwidth=${BANDWIDTH}"
+    return
+  fi
   while true; do
     local ram_mb=$(get_ram_mb)
     local cpu_cores=$(get_cpu_cores)
@@ -731,6 +760,12 @@ save_settings_install() {
         _sf_count="${SNOWFLAKE_COUNT:-1}"
         _sf_cpus="${SNOWFLAKE_CPUS:-}"
         _sf_memory="${SNOWFLAKE_MEMORY:-}"
+        _mt_enabled="${MTPROTO_ENABLED:-false}"
+        _mt_port="${MTPROTO_PORT:-443}"
+        _mt_secret="${MTPROTO_SECRET:-}"
+        _mt_domain="${MTPROTO_DOMAIN:-google.com}"
+        _mt_cpus="${MTPROTO_CPUS:-}"
+        _mt_memory="${MTPROTO_MEMORY:-}"
         _dc_gb="${DATA_CAP_GB:-0}"
         _dc_up="${DATA_CAP_UP_GB:-0}"
         _dc_down="${DATA_CAP_DOWN_GB:-0}"
@@ -765,6 +800,12 @@ SNOWFLAKE_ENABLED=$_sf_enabled
 SNOWFLAKE_COUNT=$_sf_count
 SNOWFLAKE_CPUS=$_sf_cpus
 SNOWFLAKE_MEMORY=$_sf_memory
+MTPROTO_ENABLED=$_mt_enabled
+MTPROTO_PORT=$_mt_port
+MTPROTO_SECRET="$_mt_secret"
+MTPROTO_DOMAIN=$_mt_domain
+MTPROTO_CPUS=$_mt_cpus
+MTPROTO_MEMORY=$_mt_memory
 TELEGRAM_BOT_TOKEN="$_tg_token"
 TELEGRAM_CHAT_ID="$_tg_chat"
 TELEGRAM_INTERVAL=$_tg_interval
@@ -898,7 +939,7 @@ create_management_script() {
 # Reference: https://github.com/ssmirr/conduit/releases/latest
 #
 
-VERSION="1.3"
+VERSION="1.3.1"
 INSTALL_DIR="REPLACE_ME_INSTALL_DIR"
 BACKUP_DIR="$INSTALL_DIR/backups"
 CONDUIT_IMAGE="ghcr.io/ssmirr/conduit/conduit:latest"
@@ -932,6 +973,14 @@ SNOWFLAKE_ENABLED=${SNOWFLAKE_ENABLED:-false}
 SNOWFLAKE_COUNT=${SNOWFLAKE_COUNT:-1}
 SNOWFLAKE_CPUS=${SNOWFLAKE_CPUS:-}
 SNOWFLAKE_MEMORY=${SNOWFLAKE_MEMORY:-}
+MTPROTO_IMAGE="nineseconds/mtg:2.1.7"
+MTPROTO_ENABLED=${MTPROTO_ENABLED:-false}
+MTPROTO_PORT=${MTPROTO_PORT:-443}
+MTPROTO_SECRET=${MTPROTO_SECRET:-}
+MTPROTO_DOMAIN=${MTPROTO_DOMAIN:-google.com}
+MTPROTO_CPUS=${MTPROTO_CPUS:-}
+MTPROTO_MEMORY=${MTPROTO_MEMORY:-}
+MTPROTO_STATS_PORT=3129
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
 TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
 TELEGRAM_INTERVAL=${TELEGRAM_INTERVAL:-6}
@@ -1516,6 +1565,544 @@ show_snowflake_status() {
         echo -e "  Served:      ${sf_conns:-0} connections${_sf_to_lbl}"
         echo -e "  Traffic:     ↓ $(format_bytes ${sf_in:-0})  ↑ $(format_bytes ${sf_out:-0})"
     fi
+}
+
+# ── MTProto Proxy (mtg v2) ───────────────────────────────────────────────────
+
+get_mtproto_default_cpus() {
+    echo "0.5"
+}
+
+get_mtproto_default_memory() {
+    echo "128m"
+}
+
+get_mtproto_cpus() {
+    if [ -n "$MTPROTO_CPUS" ]; then
+        echo "$MTPROTO_CPUS"
+    else
+        get_mtproto_default_cpus
+    fi
+}
+
+get_mtproto_memory() {
+    if [ -n "$MTPROTO_MEMORY" ]; then
+        echo "$MTPROTO_MEMORY"
+    else
+        get_mtproto_default_memory
+    fi
+}
+
+run_mtproto_container() {
+    local mt_cpus=$(get_mtproto_cpus)
+    local mt_mem=$(get_mtproto_memory)
+
+    # Save traffic before removing existing container
+    save_mtproto_traffic
+
+    # Remove existing container
+    docker rm -f "mtproto-proxy" >/dev/null 2>&1 || true
+
+    # Pull image if not available locally
+    if ! docker image inspect "$MTPROTO_IMAGE" >/dev/null 2>&1; then
+        docker pull "$MTPROTO_IMAGE" 2>/dev/null || true
+    fi
+
+    local actual_cpus=$(LC_ALL=C awk -v req="$mt_cpus" -v cores="$(nproc 2>/dev/null || echo 1)" \
+        'BEGIN{c=req+0; if(c>cores+0) c=cores+0; printf "%.2f",c}')
+
+    # Generate TOML config for mtg v2
+    local _mt_config_dir="$INSTALL_DIR/mtproxy"
+    mkdir -p "$_mt_config_dir" 2>/dev/null || true
+    cat > "$_mt_config_dir/config.toml" << MTCFG
+secret = "$MTPROTO_SECRET"
+bind-to = "0.0.0.0:${MTPROTO_PORT:-443}"
+
+[stats.prometheus]
+enabled = true
+bind-to = "127.0.0.1:${MTPROTO_STATS_PORT:-3129}"
+
+[defense.anti-replay]
+enabled = true
+max-size = "1mib"
+error-rate = 0.001
+MTCFG
+
+    local _mt_err
+    _mt_err=$(docker run -d \
+        --name "mtproto-proxy" \
+        --restart unless-stopped \
+        --log-opt max-size=10m \
+        --log-opt max-file=3 \
+        --cpus "$actual_cpus" \
+        --memory "$mt_mem" \
+        --memory-swap "$mt_mem" \
+        --network host \
+        -v "${_mt_config_dir}/config.toml:/config.toml:ro" \
+        "$MTPROTO_IMAGE" run /config.toml 2>&1)
+    local _mt_rc=$?
+    if [ $_mt_rc -ne 0 ]; then
+        echo -e "  ${DIM}Docker: ${_mt_err}${NC}" >&2
+    fi
+    return $_mt_rc
+}
+
+# Get current session traffic from mtg Prometheus metrics
+# Returns: "download_bytes upload_bytes"
+get_mtproto_stats() {
+    if ! is_mtproto_running; then
+        echo "0 0"
+        return
+    fi
+    local metrics
+    metrics=$(curl -s --max-time 2 "http://127.0.0.1:${MTPROTO_STATS_PORT:-3129}/" 2>/dev/null)
+    if [ -n "$metrics" ]; then
+        local traffic_in traffic_out
+        traffic_in=$(echo "$metrics" | awk '/^mtg_telegram_traffic\{.*direction="to_client"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
+        traffic_out=$(echo "$metrics" | awk '/^mtg_telegram_traffic\{.*direction="from_client"/ {sum+=$NF} END {printf "%.0f", sum}' 2>/dev/null)
+        echo "${traffic_in:-0} ${traffic_out:-0}"
+        return
+    fi
+    echo "0 0"
+}
+
+# Get total traffic (current session + prior sessions)
+# Returns: "download_bytes upload_bytes"
+get_mtproto_traffic() {
+    local prior_dl=0 prior_ul=0
+    local traffic_file="$PERSIST_DIR/mtproto_traffic"
+    if [ -f "$traffic_file" ]; then
+        read -r prior_dl prior_ul < "$traffic_file" 2>/dev/null || true
+    fi
+    local cur_dl=0 cur_ul=0
+    local stats
+    stats=$(get_mtproto_stats)
+    read -r cur_dl cur_ul <<< "$stats"
+    echo "$(( ${prior_dl:-0} + ${cur_dl:-0} )) $(( ${prior_ul:-0} + ${cur_ul:-0} ))"
+}
+
+# Save current session traffic to cumulative file (call before stop/restart)
+save_mtproto_traffic() {
+    if ! is_mtproto_running; then
+        return
+    fi
+    local traffic_file="$PERSIST_DIR/mtproto_traffic"
+    local stats
+    stats=$(get_mtproto_stats)
+    local cur_dl=0 cur_ul=0
+    read -r cur_dl cur_ul <<< "$stats"
+    [ "${cur_dl:-0}" -eq 0 ] && [ "${cur_ul:-0}" -eq 0 ] && return
+    local prior_dl=0 prior_ul=0
+    if [ -f "$traffic_file" ]; then
+        read -r prior_dl prior_ul < "$traffic_file" 2>/dev/null || true
+    fi
+    echo "$(( ${prior_dl:-0} + ${cur_dl:-0} )) $(( ${prior_ul:-0} + ${cur_ul:-0} ))" > "$traffic_file"
+}
+
+stop_mtproto() {
+    save_mtproto_traffic
+    docker stop --timeout 10 "mtproto-proxy" 2>/dev/null || true
+}
+
+start_mtproto() {
+    # Don't start if data cap exceeded
+    if [ -f "$PERSIST_DIR/data_cap_exceeded" ]; then
+        echo -e "${YELLOW}⚠ Data cap exceeded. MTProto will not start.${NC}" 2>/dev/null
+        return 1
+    fi
+    if [ -z "$MTPROTO_SECRET" ]; then
+        echo -e "${RED}MTProto secret not configured.${NC}" 2>/dev/null
+        return 1
+    fi
+    local cname="mtproto-proxy"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+        echo -e "${GREEN}✓ ${cname} already running${NC}"
+    elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+        docker start "$cname" 2>/dev/null && echo -e "${GREEN}✓ ${cname} started${NC}" || echo -e "${RED}✗ Failed to start ${cname}${NC}"
+    else
+        run_mtproto_container && echo -e "${GREEN}✓ ${cname} created${NC}" || echo -e "${RED}✗ Failed to create ${cname}${NC}"
+    fi
+}
+
+restart_mtproto() {
+    # Don't restart if data cap exceeded
+    if [ -f "$PERSIST_DIR/data_cap_exceeded" ]; then
+        echo -e "${YELLOW}⚠ Data cap exceeded. MTProto will not restart.${NC}" 2>/dev/null
+        return 1
+    fi
+    echo -e "  Recreating mtproto-proxy..."
+    run_mtproto_container && echo -e "  ${GREEN}✓ mtproto-proxy restarted${NC}" || echo -e "  ${RED}✗ Failed${NC}"
+}
+
+is_mtproto_running() {
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^mtproto-proxy$"
+}
+
+get_mtproto_link() {
+    local _mt_ip
+    _mt_ip=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null)
+    if [ -z "$_mt_ip" ]; then
+        echo "Could not detect server IP."
+        return 1
+    fi
+    echo "tg://proxy?server=${_mt_ip}&port=${MTPROTO_PORT}&secret=${MTPROTO_SECRET}"
+}
+
+show_mtproto_status() {
+    if [ "$MTPROTO_ENABLED" != "true" ]; then
+        echo -e "  MTProto: ${DIM}Disabled${NC}"
+        return
+    fi
+    local mt_status="${RED}Stopped${NC}"
+    is_mtproto_running && mt_status="${GREEN}Running${NC}"
+    echo -e "  MTProto: ${mt_status} (port ${MTPROTO_PORT:-443}, domain ${MTPROTO_DOMAIN:-google.com})"
+    local _mt_t
+    _mt_t=$(get_mtproto_traffic)
+    local _mt_dl _mt_ul
+    read -r _mt_dl _mt_ul <<< "$_mt_t"
+    if [ "${_mt_dl:-0}" -gt 0 ] || [ "${_mt_ul:-0}" -gt 0 ] 2>/dev/null; then
+        echo -e "  Traffic:   ↓ $(format_bytes ${_mt_dl:-0})  ↑ $(format_bytes ${_mt_ul:-0})"
+    fi
+    if is_mtproto_running; then
+        local _mt_ip
+        _mt_ip=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null)
+        [ -n "$_mt_ip" ] && echo -e "  Link:    tg://proxy?server=${_mt_ip}&port=${MTPROTO_PORT}&secret=${MTPROTO_SECRET}"
+    fi
+}
+
+show_mtproto_menu() {
+    while true; do
+        clear
+        echo ""
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║${NC}                         ${BOLD}MTPROTO PROXY${NC}                           ${CYAN}║${NC}"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        if [ "$MTPROTO_ENABLED" = "true" ]; then
+            local mt_status="${RED}Stopped${NC}"
+            is_mtproto_running && mt_status="${GREEN}Running${NC}"
+            echo -e "  Status:      ${mt_status}"
+            echo -e "  Port:        ${MTPROTO_PORT:-443}"
+            echo -e "  Domain:      ${MTPROTO_DOMAIN:-google.com}"
+            echo -e "  Resources:   CPU $(get_mtproto_cpus)  RAM $(get_mtproto_memory)"
+            # Traffic stats
+            local _mt_t
+            _mt_t=$(get_mtproto_traffic)
+            local _mt_dl _mt_ul
+            read -r _mt_dl _mt_ul <<< "$_mt_t"
+            echo -e "  Traffic:     ↓ $(format_bytes ${_mt_dl:-0})  ↑ $(format_bytes ${_mt_ul:-0})"
+            if is_mtproto_running; then
+                local _mt_ip
+                _mt_ip=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null)
+                if [ -n "$_mt_ip" ]; then
+                    echo ""
+                    echo -e "  ${BOLD}Share link:${NC}"
+                    echo -e "  ${CYAN}tg://proxy?server=${_mt_ip}&port=${MTPROTO_PORT}&secret=${MTPROTO_SECRET}${NC}"
+                fi
+            fi
+            echo ""
+            echo "  Options:"
+            echo "    1. Start"
+            echo "    2. Stop"
+            echo "    3. Restart"
+            echo "    4. Change port"
+            echo "    5. Change resources"
+            echo "    6. View logs"
+            echo "    7. Share link & QR code"
+            echo "    8. Share on Telegram"
+            echo "    9. Remove MTProto"
+            echo "    0. Back"
+            echo ""
+            local choice
+            read -p "  Choice: " choice < /dev/tty || return
+            case "$choice" in
+                1)
+                    echo ""
+                    start_mtproto
+                    ;;
+                2)
+                    echo ""
+                    stop_mtproto
+                    echo -e "  ${GREEN}✓ MTProto stopped${NC}"
+                    ;;
+                3)
+                    echo ""
+                    restart_mtproto
+                    ;;
+                4)
+                    echo ""
+                    local new_port
+                    read -p "  New port [${MTPROTO_PORT:-443}]: " new_port < /dev/tty || true
+                    if [ -n "$new_port" ]; then
+                        if echo "$new_port" | grep -qE '^[0-9]+$' && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ] 2>/dev/null; then
+                            # Warn if port is in use (skip check for current mtproto port)
+                            if [ "$new_port" != "$MTPROTO_PORT" ]; then
+                                if ss -tuln 2>/dev/null | grep -q ":${new_port} " || \
+                                   netstat -tuln 2>/dev/null | grep -q ":${new_port} "; then
+                                    echo -e "  ${YELLOW}⚠ Port ${new_port} appears to be in use.${NC}"
+                                fi
+                            fi
+                            MTPROTO_PORT="$new_port"
+                            save_settings
+                            echo -e "  ${GREEN}✓ Port changed to ${new_port}${NC}"
+                            if is_mtproto_running; then
+                                echo -e "  Restarting to apply..."
+                                restart_mtproto
+                            fi
+                        else
+                            echo -e "  ${RED}Invalid port. Must be 1-65535.${NC}"
+                        fi
+                    fi
+                    ;;
+                5)
+                    echo ""
+                    local new_cpus new_mem
+                    local cur_cpus=$(get_mtproto_cpus)
+                    local cur_mem=$(get_mtproto_memory)
+                    echo -e "  Current: CPU ${cur_cpus} | RAM ${cur_mem}"
+                    read -p "  CPU limit (e.g. 0.5, 1.0) [${cur_cpus}]: " new_cpus < /dev/tty || true
+                    read -p "  Memory limit (e.g. 128m, 256m) [${cur_mem}]: " new_mem < /dev/tty || true
+                    local _valid=true
+                    if [ -n "$new_cpus" ]; then
+                        if ! echo "$new_cpus" | grep -qE '^[0-9]+\.?[0-9]*$' || [ "$(awk "BEGIN{print ($new_cpus <= 0)}")" = "1" ]; then
+                            echo -e "  ${RED}Invalid CPU value. Must be a positive number.${NC}"
+                            _valid=false
+                        fi
+                    fi
+                    if [ -n "$new_mem" ]; then
+                        if ! echo "$new_mem" | grep -qiE '^[1-9][0-9]*[mMgG]$'; then
+                            echo -e "  ${RED}Invalid memory value. Use format like 128m or 1g.${NC}"
+                            _valid=false
+                        fi
+                    fi
+                    [ "$_valid" = false ] && continue
+                    [ -n "$new_cpus" ] && MTPROTO_CPUS="$new_cpus"
+                    [ -n "$new_mem" ] && MTPROTO_MEMORY="$new_mem"
+                    save_settings
+                    restart_mtproto && echo -e "  ${GREEN}✓ Resources updated and applied${NC}" || echo -e "  ${GREEN}✓ Resources saved (will apply on next start)${NC}"
+                    ;;
+                6)
+                    echo ""
+                    if ! is_mtproto_running; then
+                        echo -e "  ${YELLOW}MTProto is not running.${NC}"
+                        echo ""
+                        read -n 1 -s -p "  Press any key to continue..." < /dev/tty || true
+                    else
+                        echo -e "  ${CYAN}── Logs: ${BOLD}mtproto-proxy${NC} (last 30 lines) ──${NC}"
+                        echo ""
+                        docker logs --tail 30 "mtproto-proxy" 2>&1 | sed 's/^/    /'
+                        echo ""
+                        read -n 1 -s -p "  Press any key to continue..." < /dev/tty || true
+                    fi
+                    ;;
+                7)
+                    echo ""
+                    local _mt_ip
+                    _mt_ip=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null)
+                    if [ -n "$_mt_ip" ]; then
+                        local _mt_link="tg://proxy?server=${_mt_ip}&port=${MTPROTO_PORT}&secret=${MTPROTO_SECRET}"
+                        echo -e "  ${BOLD}Share this link with Telegram users:${NC}"
+                        echo ""
+                        echo -e "  ${CYAN}${_mt_link}${NC}"
+                        echo ""
+                        if command -v qrencode &>/dev/null; then
+                            qrencode -t ANSIUTF8 "$_mt_link" 2>/dev/null | sed 's/^/  /'
+                        fi
+                    else
+                        echo -e "  ${RED}Could not detect server IP.${NC}"
+                    fi
+                    echo ""
+                    read -n 1 -s -p "  Press any key to continue..." < /dev/tty || true
+                    ;;
+                8)
+                    echo ""
+                    if [ "${TELEGRAM_ENABLED:-false}" != "true" ] || [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+                        echo -e "  ${YELLOW}Telegram bot is not enabled.${NC}"
+                        echo -e "  ${DIM}Enable it in Settings → t. Telegram notifications${NC}"
+                    else
+                        local _mt_ip
+                        _mt_ip=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null)
+                        if [ -n "$_mt_ip" ]; then
+                            local _mt_link="tg://proxy?server=${_mt_ip}&port=${MTPROTO_PORT}&secret=${MTPROTO_SECRET}"
+                            echo -e "  Sending to Telegram..."
+                            # Send QR image if qrencode available
+                            if command -v qrencode &>/dev/null; then
+                                qrencode -t PNG -o /tmp/mtproto_share_qr.png "$_mt_link" 2>/dev/null
+                                if [ -f /tmp/mtproto_share_qr.png ]; then
+                                    local _tg_caption="📡 *MTProto Proxy*"
+                                    _tg_caption+=$'\n'"Server: \`${_mt_ip}\`"
+                                    _tg_caption+=$'\n'"Port: ${MTPROTO_PORT}"
+                                    _tg_caption+=$'\n'"Domain: ${MTPROTO_DOMAIN}"
+                                    _tg_caption+=$'\n'$'\n'"🔗 [Connect to Proxy](${_mt_link})"
+                                    curl -s --max-time 30 -X POST \
+                                        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+                                        -F "chat_id=$TELEGRAM_CHAT_ID" \
+                                        -F "photo=@/tmp/mtproto_share_qr.png" \
+                                        -F "caption=$_tg_caption" \
+                                        -F "parse_mode=Markdown" >/dev/null 2>&1
+                                    rm -f /tmp/mtproto_share_qr.png
+                                    echo -e "  ${GREEN}✓ Link and QR code sent to Telegram${NC}"
+                                else
+                                    telegram_send_message "📡 *MTProto Proxy*
+Server: \`${_mt_ip}\`
+Port: ${MTPROTO_PORT}
+Domain: ${MTPROTO_DOMAIN}
+
+🔗 [Connect to Proxy](${_mt_link})"
+                                    echo -e "  ${GREEN}✓ Link sent to Telegram${NC}"
+                                fi
+                            else
+                                telegram_send_message "📡 *MTProto Proxy*
+Server: \`${_mt_ip}\`
+Port: ${MTPROTO_PORT}
+Domain: ${MTPROTO_DOMAIN}
+
+🔗 [Connect to Proxy](${_mt_link})"
+                                echo -e "  ${GREEN}✓ Link sent to Telegram${NC}"
+                            fi
+                        else
+                            echo -e "  ${RED}Could not detect server IP.${NC}"
+                        fi
+                    fi
+                    echo ""
+                    read -n 1 -s -p "  Press any key to continue..." < /dev/tty || true
+                    ;;
+                9)
+                    echo ""
+                    echo -e "  ${YELLOW}⚠ This will remove the MTProto proxy container and configuration.${NC}"
+                    local _confirm
+                    read -p "  Are you sure? (y/n): " _confirm < /dev/tty || return
+                    if [[ "${_confirm:-n}" =~ ^[Yy]$ ]]; then
+                        stop_mtproto
+                        docker rm -f "mtproto-proxy" 2>/dev/null || true
+                        docker rmi "$MTPROTO_IMAGE" 2>/dev/null || true
+                        rm -f "$PERSIST_DIR/mtproto_traffic" 2>/dev/null
+                        rm -rf "$INSTALL_DIR/mtproxy" 2>/dev/null
+                        MTPROTO_ENABLED=false
+                        MTPROTO_SECRET=""
+                        save_settings
+                        echo -e "  ${GREEN}✓ MTProto removed${NC}"
+                        return
+                    fi
+                    ;;
+                0|"")
+                    return
+                    ;;
+            esac
+        else
+            echo -e "  Status:      ${DIM}Disabled${NC}"
+            echo ""
+            echo -e "  MTProto proxy lets Telegram users connect through your server."
+            echo -e "  Uses fake-TLS (mtg v2) to disguise traffic as HTTPS."
+            echo -e "  Ideal for users in censored regions."
+            echo ""
+            echo "  Options:"
+            echo "    1. Enable MTProto Proxy"
+            echo "    0. Back"
+            echo ""
+            local choice
+            read -p "  Choice: " choice < /dev/tty || return
+            case "$choice" in
+                1)
+                    echo ""
+                    local new_port new_domain
+                    read -p "  Port to listen on [443]: " new_port < /dev/tty || true
+                    new_port="${new_port:-443}"
+                    if ! echo "$new_port" | grep -qE '^[0-9]+$' || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ] 2>/dev/null; then
+                        echo -e "  ${RED}Invalid port. Using 443.${NC}"
+                        new_port=443
+                    fi
+                    # Check if port is already in use
+                    if ss -tuln 2>/dev/null | grep -q ":${new_port} " || \
+                       netstat -tuln 2>/dev/null | grep -q ":${new_port} "; then
+                        echo -e "  ${YELLOW}⚠ Port ${new_port} appears to be in use.${NC}"
+                        local _port_confirm
+                        read -p "  Continue anyway? (y/n): " _port_confirm < /dev/tty || true
+                        if [[ ! "${_port_confirm:-n}" =~ ^[Yy]$ ]]; then
+                            continue
+                        fi
+                    fi
+                    echo ""
+                    echo -e "  Fronting domain (disguises traffic as HTTPS to this site):"
+                    echo -e "  ${DIM}Suggested: google.com, cloudflare.com, bing.com${NC}"
+                    read -p "  Domain [google.com]: " new_domain < /dev/tty || true
+                    new_domain="${new_domain:-google.com}"
+                    echo ""
+                    echo -e "  Pulling mtg image..."
+                    if ! docker pull "$MTPROTO_IMAGE" 2>/dev/null; then
+                        echo -e "  ${RED}✗ Failed to pull image. Check internet connection.${NC}"
+                        continue
+                    fi
+                    echo -e "  ${GREEN}✓ Image ready${NC}"
+                    echo ""
+                    echo -e "  Generating secret for ${new_domain}..."
+                    local mt_secret
+                    mt_secret=$(docker run --rm "$MTPROTO_IMAGE" generate-secret --hex "$new_domain" 2>/dev/null)
+                    if [ -z "$mt_secret" ]; then
+                        echo -e "  ${RED}✗ Failed to generate secret.${NC}"
+                        continue
+                    fi
+                    echo -e "  ${GREEN}✓ Secret generated${NC}"
+                    echo ""
+                    echo -e "  ${BOLD}Configure resources${NC} (press Enter for defaults):"
+                    echo ""
+                    local new_cpus new_mem
+                    read -p "  CPU limit (e.g. 0.5, 1.0) [$(get_mtproto_default_cpus)]: " new_cpus < /dev/tty || true
+                    read -p "  Memory limit (e.g. 128m, 256m) [$(get_mtproto_default_memory)]: " new_mem < /dev/tty || true
+                    if [ -n "$new_cpus" ]; then
+                        if echo "$new_cpus" | grep -qE '^[0-9]+\.?[0-9]*$' && [ "$(awk "BEGIN{print ($new_cpus > 0)}")" = "1" ]; then
+                            MTPROTO_CPUS="$new_cpus"
+                        else
+                            echo -e "  ${YELLOW}Invalid CPU, using default.${NC}"
+                        fi
+                    fi
+                    if [ -n "$new_mem" ]; then
+                        if echo "$new_mem" | grep -qiE '^[1-9][0-9]*[mMgG]$'; then
+                            MTPROTO_MEMORY="$new_mem"
+                        else
+                            echo -e "  ${YELLOW}Invalid memory, using default.${NC}"
+                        fi
+                    fi
+                    MTPROTO_ENABLED=true
+                    MTPROTO_PORT="$new_port"
+                    MTPROTO_SECRET="$mt_secret"
+                    MTPROTO_DOMAIN="$new_domain"
+                    save_settings
+                    echo ""
+                    if [ -f "$PERSIST_DIR/data_cap_exceeded" ]; then
+                        echo -e "  ${YELLOW}⚠ MTProto enabled but data cap exceeded — container not started.${NC}"
+                        echo -e "  ${YELLOW}  Start manually after the cap resets with: conduit mtproto start${NC}"
+                    else
+                        if run_mtproto_container; then
+                            echo -e "  ${GREEN}✓ MTProto proxy enabled and running!${NC}"
+                            echo ""
+                            local _mt_ip
+                            _mt_ip=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null)
+                            if [ -n "$_mt_ip" ]; then
+                                local _mt_link="tg://proxy?server=${_mt_ip}&port=${MTPROTO_PORT}&secret=${MTPROTO_SECRET}"
+                                echo -e "  ${BOLD}Share link:${NC}"
+                                echo -e "  ${CYAN}${_mt_link}${NC}"
+                                echo ""
+                                if command -v qrencode &>/dev/null; then
+                                    echo -e "  ${BOLD}QR Code:${NC}"
+                                    qrencode -t ANSIUTF8 "$_mt_link" 2>/dev/null | sed 's/^/  /'
+                                else
+                                    echo -e "  ${DIM}Install qrencode for QR code: apt install qrencode${NC}"
+                                fi
+                            fi
+                        else
+                            echo -e "  ${RED}✗ Failed to start container${NC}"
+                        fi
+                    fi
+                    echo ""
+                    read -n 1 -s -p "  Press any key to continue..." < /dev/tty || true
+                    ;;
+                0|"")
+                    return
+                    ;;
+            esac
+        fi
+    done
 }
 
 print_header() {
@@ -3273,6 +3860,40 @@ show_info_snowflake() {
     read -n 1 -s -r -p "  Press any key to go back..." < /dev/tty
 }
 
+show_info_mtproto() {
+    clear
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  MTPROTO PROXY - WHAT IS IT?${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${YELLOW}What is MTProto Proxy?${NC}"
+    echo -e "  MTProto proxy lets ${BOLD}Telegram${NC} users connect through your server"
+    echo -e "  when Telegram is blocked in their country. Uses ${BOLD}mtg v2${NC},"
+    echo -e "  a modern implementation with fake-TLS for stealth."
+    echo ""
+    echo -e "${YELLOW}How Does Fake-TLS Work?${NC}"
+    echo -e "  ${BOLD}1.${NC} Traffic is disguised as HTTPS to a fronting domain (e.g. google.com)"
+    echo -e "  ${BOLD}2.${NC} Deep packet inspection sees normal TLS handshakes"
+    echo -e "  ${BOLD}3.${NC} Active probes get valid HTTPS responses from the fronting domain"
+    echo -e "  ${BOLD}4.${NC} Only Telegram clients with the correct secret can connect"
+    echo ""
+    echo -e "  ${DIM}Telegram App${NC} --fake TLS--> ${CYAN}Your MTProto Proxy${NC} --> ${GREEN}Telegram Servers${NC}"
+    echo ""
+    echo -e "${YELLOW}Why Use mtg v2?${NC}"
+    echo -e "  ${GREEN}•${NC} ${BOLD}Fake-TLS${NC} (ee-prefix secrets) - disguises as HTTPS traffic"
+    echo -e "  ${GREEN}•${NC} ${BOLD}Anti-replay${NC} protection against detection"
+    echo -e "  ${GREEN}•${NC} ${BOLD}Domain fronting${NC} - active probes see a real website"
+    echo -e "  ${GREEN}•${NC} Lightweight - uses minimal CPU and RAM"
+    echo -e "  ${GREEN}•${NC} No configuration files needed - runs with a single secret"
+    echo ""
+    echo -e "${YELLOW}Sharing With Users${NC}"
+    echo -e "  Share the ${BOLD}tg://${NC} link from the menu or use /proxy in Telegram."
+    echo -e "  Users tap the link to add your proxy to their Telegram app."
+    echo ""
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    read -n 1 -s -r -p "  Press any key to go back..." < /dev/tty
+}
+
 show_info_safety() {
     clear
     echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
@@ -3677,8 +4298,6 @@ show_status() {
         load_peak_connections
     fi
 
-    echo ""
-
 
     local docker_ps_cache=$(docker ps 2>/dev/null)
     local running_count=0
@@ -3988,6 +4607,19 @@ show_status() {
         echo -e "${sf_line}${EL}"
     fi
 
+    if [ "$MTPROTO_ENABLED" = "true" ]; then
+        local mt_stat="${RED}Stopped${NC}"
+        is_mtproto_running && mt_stat="${GREEN}Running${NC}"
+        local mt_line="  MTProxy:      ${mt_stat}"
+        if is_mtproto_running; then
+            local _mt_t=$(get_mtproto_traffic)
+            local _mt_dl _mt_ul
+            read -r _mt_dl _mt_ul <<< "$_mt_t"
+            mt_line+=" | ↓$(format_bytes ${_mt_dl:-0}) ↑$(format_bytes ${_mt_ul:-0})"
+        fi
+        echo -e "${mt_line}${EL}"
+    fi
+
 
     echo -e "${EL}"
     echo -e "${CYAN}═══ AUTO-START SERVICE ═══${NC}${EL}"
@@ -4130,6 +4762,8 @@ start_conduit() {
     setup_tracker_service 2>/dev/null || true
     # Start snowflake if enabled
     [ "$SNOWFLAKE_ENABLED" = "true" ] && start_snowflake 2>/dev/null
+    # Start mtproto if enabled
+    [ "$MTPROTO_ENABLED" = "true" ] && start_mtproto 2>/dev/null
     return 0
 }
 
@@ -4166,6 +4800,7 @@ stop_conduit() {
     done
     [ "$stopped" -eq 0 ] && echo -e "${YELLOW}No Conduit containers are running${NC}"
     [ "$SNOWFLAKE_ENABLED" = "true" ] && stop_snowflake 2>/dev/null
+    [ "$MTPROTO_ENABLED" = "true" ] && stop_mtproto 2>/dev/null
     stop_tracker_service 2>/dev/null || true
     return 0
 }
@@ -4313,6 +4948,8 @@ restart_conduit() {
     setup_tracker_service 2>/dev/null || true
     # Restart snowflake if enabled
     [ "$SNOWFLAKE_ENABLED" = "true" ] && restart_snowflake 2>/dev/null
+    # Restart mtproto if enabled
+    [ "$MTPROTO_ENABLED" = "true" ] && restart_mtproto 2>/dev/null
 }
 
 change_settings() {
@@ -4734,6 +5371,26 @@ uninstall_all() {
         docker stop "$name" 2>/dev/null || true
         docker rm -f "$name" 2>/dev/null || true
     done
+
+    # Stop and remove Snowflake containers
+    if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+        echo -e "${BLUE}[INFO]${NC} Removing Snowflake proxy..."
+        stop_snowflake 2>/dev/null
+        local _si
+        for _si in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+            docker rm -f "$(get_snowflake_name $_si)" 2>/dev/null || true
+            docker volume rm "$(get_snowflake_volume $_si)" 2>/dev/null || true
+        done
+        docker rmi "$SNOWFLAKE_IMAGE" 2>/dev/null || true
+    fi
+    # Stop and remove MTProto container
+    if [ "$MTPROTO_ENABLED" = "true" ]; then
+        echo -e "${BLUE}[INFO]${NC} Removing MTProto proxy..."
+        stop_mtproto 2>/dev/null
+        docker rm -f "mtproto-proxy" 2>/dev/null || true
+        rm -rf "$INSTALL_DIR/mtproxy" 2>/dev/null
+        docker rmi "$MTPROTO_IMAGE" 2>/dev/null || true
+    fi
 
     echo -e "${BLUE}[INFO]${NC} Removing Conduit Docker image..."
     docker rmi "$CONDUIT_IMAGE" 2>/dev/null || true
@@ -5385,6 +6042,7 @@ check_data_cap() {
                 docker stop "$name" 2>/dev/null || true
             done
             [ "$SNOWFLAKE_ENABLED" = "true" ] && stop_snowflake 2>/dev/null
+            [ "$MTPROTO_ENABLED" = "true" ] && stop_mtproto 2>/dev/null
         fi
         return 1  # cap exceeded
     else
@@ -5550,6 +6208,12 @@ SNOWFLAKE_ENABLED=${SNOWFLAKE_ENABLED:-false}
 SNOWFLAKE_COUNT=${SNOWFLAKE_COUNT:-1}
 SNOWFLAKE_CPUS=${SNOWFLAKE_CPUS:-}
 SNOWFLAKE_MEMORY=${SNOWFLAKE_MEMORY:-}
+MTPROTO_ENABLED=${MTPROTO_ENABLED:-false}
+MTPROTO_PORT=${MTPROTO_PORT:-443}
+MTPROTO_SECRET="${MTPROTO_SECRET:-}"
+MTPROTO_DOMAIN=${MTPROTO_DOMAIN:-google.com}
+MTPROTO_CPUS=${MTPROTO_CPUS:-}
+MTPROTO_MEMORY=${MTPROTO_MEMORY:-}
 EOF
     # Save per-container overrides
     for i in $(seq 1 "$CONTAINER_COUNT"); do
@@ -6376,6 +7040,80 @@ except Exception:
             local cb_id="$field3"
             local cb_data="$field4"
             case "$cb_data" in
+                mt_start)
+                    telegram_answer_callback "$cb_id" "Starting MTProto..."
+                    if [ "$MTPROTO_ENABLED" = "true" ] && [ -n "$MTPROTO_SECRET" ]; then
+                        start_mtproto >/dev/null 2>&1
+                        if is_mtproto_running; then
+                            telegram_send "🟢 MTProto proxy started."
+                        else
+                            telegram_send "❌ Failed to start MTProto proxy."
+                        fi
+                    else
+                        telegram_send "❌ MTProto not configured."
+                    fi
+                    ;;
+                mt_stop)
+                    telegram_answer_callback "$cb_id" "Stopping MTProto..."
+                    if is_mtproto_running; then
+                        save_mtproto_traffic
+                        docker stop --timeout 10 "mtproto-proxy" >/dev/null 2>&1
+                        telegram_send "🛑 MTProto proxy stopped."
+                    else
+                        telegram_send "ℹ️ MTProto proxy is not running."
+                    fi
+                    ;;
+                mt_restart)
+                    telegram_answer_callback "$cb_id" "Restarting MTProto..."
+                    if [ -f "$PERSIST_DIR/data_cap_exceeded" ]; then
+                        telegram_send "⚠️ Data cap exceeded. MTProto will not restart."
+                    elif [ "$MTPROTO_ENABLED" = "true" ] && [ -n "$MTPROTO_SECRET" ]; then
+                        save_mtproto_traffic
+                        docker restart "mtproto-proxy" >/dev/null 2>&1
+                        if is_mtproto_running; then
+                            telegram_send "🟢 MTProto proxy restarted."
+                        else
+                            telegram_send "❌ Failed to restart MTProto proxy."
+                        fi
+                    else
+                        telegram_send "❌ MTProto not configured."
+                    fi
+                    ;;
+                sf_start)
+                    telegram_answer_callback "$cb_id" "Starting Snowflake..."
+                    if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+                        start_snowflake >/dev/null 2>&1
+                        if is_snowflake_running; then
+                            telegram_send "🟢 Snowflake proxy started."
+                        else
+                            telegram_send "❌ Failed to start Snowflake proxy."
+                        fi
+                    else
+                        telegram_send "❌ Snowflake not enabled."
+                    fi
+                    ;;
+                sf_stop)
+                    telegram_answer_callback "$cb_id" "Stopping Snowflake..."
+                    if is_snowflake_running; then
+                        stop_snowflake >/dev/null 2>&1
+                        telegram_send "🛑 Snowflake proxy stopped."
+                    else
+                        telegram_send "ℹ️ Snowflake proxy is not running."
+                    fi
+                    ;;
+                sf_restart)
+                    telegram_answer_callback "$cb_id" "Restarting Snowflake..."
+                    if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+                        restart_snowflake >/dev/null 2>&1
+                        if is_snowflake_running; then
+                            telegram_send "🟢 Snowflake proxy restarted."
+                        else
+                            telegram_send "❌ Failed to restart Snowflake proxy."
+                        fi
+                    else
+                        telegram_send "❌ Snowflake not enabled."
+                    fi
+                    ;;
                 qr_*)
                     local qr_num="${cb_data#qr_}"
                     telegram_answer_callback "$cb_id" "Generating QR for container ${qr_num}..."
@@ -6514,6 +7252,15 @@ except Exception:
                         docker restart "$sf_cname" >/dev/null 2>&1 && ra_ok=$((ra_ok + 1)) || ra_fail=$((ra_fail + 1))
                     done
                 fi
+                # Restart mtproto container if enabled
+                if [ "$MTPROTO_ENABLED" = "true" ]; then
+                    if [ -f "$PERSIST_DIR/data_cap_exceeded" ]; then
+                        ra_fail=$((ra_fail + 1))
+                    else
+                        save_mtproto_traffic
+                        docker restart "mtproto-proxy" >/dev/null 2>&1 && ra_ok=$((ra_ok + 1)) || ra_fail=$((ra_fail + 1))
+                    fi
+                fi
                 if [ "$ra_fail" -eq 0 ]; then
                     telegram_send "✅ All ${ra_ok} containers restarted successfully"
                 else
@@ -6539,6 +7286,14 @@ except Exception:
                         docker start "$sf_cname" >/dev/null 2>&1 && sa_ok=$((sa_ok + 1)) || sa_fail=$((sa_fail + 1))
                     done
                 fi
+                # Start mtproto container if enabled
+                if [ "$MTPROTO_ENABLED" = "true" ]; then
+                    if [ -f "$PERSIST_DIR/data_cap_exceeded" ]; then
+                        sa_fail=$((sa_fail + 1))
+                    else
+                        start_mtproto >/dev/null 2>&1 && sa_ok=$((sa_ok + 1)) || sa_fail=$((sa_fail + 1))
+                    fi
+                fi
                 if [ "$sa_fail" -eq 0 ]; then
                     telegram_send "🟢 All ${sa_ok} containers started successfully"
                 else
@@ -6563,6 +7318,11 @@ except Exception:
                         [ "$si" -gt 1 ] && sf_cname="snowflake-proxy-${si}"
                         docker stop "$sf_cname" >/dev/null 2>&1 && sto_ok=$((sto_ok + 1)) || sto_fail=$((sto_fail + 1))
                     done
+                fi
+                # Stop mtproto container if enabled
+                if [ "$MTPROTO_ENABLED" = "true" ]; then
+                    save_mtproto_traffic
+                    docker stop --timeout 10 "mtproto-proxy" >/dev/null 2>&1 && sto_ok=$((sto_ok + 1)) || sto_fail=$((sto_fail + 1))
                 fi
                 if [ "$sto_fail" -eq 0 ]; then
                     telegram_send "🛑 All ${sto_ok} containers stopped"
@@ -6619,6 +7379,8 @@ except Exception:
                 st_msg+="🔕 Alerts: ${TELEGRAM_ALERTS_ENABLED:-true}"
                 st_msg+=$'\n'
                 st_msg+="🌡 CPU Alert: ${TELEGRAM_CPU_ALERT:-true}"
+                st_msg+=$'\n'
+                st_msg+="📡 MTProto: ${MTPROTO_ENABLED:-false}"
                 telegram_send "$st_msg"
                 ;;
             /health|/health@*)
@@ -6782,6 +7544,80 @@ ${log_output}
                     telegram_send_inline_keyboard "📱 Select a container for QR code:" "$kb"
                 fi
                 ;;
+            /snowflake|/snowflake@*)
+                if [ "$SNOWFLAKE_ENABLED" != "true" ]; then
+                    telegram_send "❌ Snowflake proxy is not enabled."
+                else
+                    local _sf_running=false
+                    is_snowflake_running && _sf_running=true
+                    local _sf_status="🔴 Stopped"
+                    [ "$_sf_running" = "true" ] && _sf_status="🟢 Running"
+                    local _sf_count="${SNOWFLAKE_COUNT:-1}"
+                    local _sf_msg="❄️ *Snowflake Proxy*
+Status: ${_sf_status}
+Instances: ${_sf_count}"
+                    local _sf_buttons=""
+                    if [ "$_sf_running" = "true" ]; then
+                        _sf_buttons="{\"text\":\"🛑 Stop\",\"callback_data\":\"sf_stop\"},{\"text\":\"🔄 Restart\",\"callback_data\":\"sf_restart\"}"
+                    else
+                        _sf_buttons="{\"text\":\"▶️ Start\",\"callback_data\":\"sf_start\"}"
+                    fi
+                    local _sf_kb="{\"inline_keyboard\":[[${_sf_buttons}]]}"
+                    telegram_send_inline_keyboard "$_sf_msg" "$_sf_kb"
+                fi
+                ;;
+            /proxy|/proxy@*)
+                if [ "$MTPROTO_ENABLED" != "true" ] || [ -z "$MTPROTO_SECRET" ]; then
+                    telegram_send "❌ MTProto proxy is not configured."
+                else
+                    local _mt_ip
+                    _mt_ip=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null)
+                    if [ -z "$_mt_ip" ]; then
+                        telegram_send "❌ Could not detect server IP."
+                    else
+                        local _mt_link="tg://proxy?server=${_mt_ip}&port=${MTPROTO_PORT}&secret=${MTPROTO_SECRET}"
+                        local _mt_running=false
+                        docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^mtproto-proxy$" && _mt_running=true
+                        local _mt_status="🔴 Stopped"
+                        [ "$_mt_running" = "true" ] && _mt_status="🟢 Running"
+                        local _mt_t
+                        _mt_t=$(get_mtproto_traffic)
+                        local _mt_dl _mt_ul
+                        read -r _mt_dl _mt_ul <<< "$_mt_t"
+                        local _mt_traffic=""
+                        if [ "${_mt_dl:-0}" -gt 0 ] || [ "${_mt_ul:-0}" -gt 0 ] 2>/dev/null; then
+                            _mt_traffic="
+Traffic: ↓ $(format_bytes ${_mt_dl:-0})  ↑ $(format_bytes ${_mt_ul:-0})"
+                        fi
+                        local _mt_msg="📡 *MTProto Proxy*
+Status: ${_mt_status}
+Server: \`${_mt_ip}\`
+Port: ${MTPROTO_PORT}
+Domain: ${MTPROTO_DOMAIN}${_mt_traffic}
+
+🔗 [Connect to Proxy](${_mt_link})"
+                        # Build inline keyboard for individual control
+                        local _mt_buttons=""
+                        if [ "$_mt_running" = "true" ]; then
+                            _mt_buttons="{\"text\":\"🛑 Stop\",\"callback_data\":\"mt_stop\"},{\"text\":\"🔄 Restart\",\"callback_data\":\"mt_restart\"}"
+                        else
+                            _mt_buttons="{\"text\":\"▶️ Start\",\"callback_data\":\"mt_start\"}"
+                        fi
+                        local _mt_kb="{\"inline_keyboard\":[[${_mt_buttons}]]}"
+                        if command -v qrencode &>/dev/null; then
+                            qrencode -t PNG -o /tmp/mtproto_qr.png "$_mt_link" 2>/dev/null
+                            if [ -f /tmp/mtproto_qr.png ]; then
+                                telegram_send_photo "/tmp/mtproto_qr.png" "$_mt_msg"
+                                rm -f /tmp/mtproto_qr.png
+                            else
+                                telegram_send_inline_keyboard "$_mt_msg" "$_mt_kb"
+                            fi
+                        else
+                            telegram_send_inline_keyboard "$_mt_msg" "$_mt_kb"
+                        fi
+                    fi
+                fi
+                ;;
             /help|/help@*)
                 telegram_send "📖 *Available Commands*
 /status — Full status report
@@ -6793,6 +7629,8 @@ ${log_output}
 /logs\\_N — Last 15 log lines for container N
 /update — Update Docker image
 /qr — QR code for rewards
+/proxy — MTProto proxy (status + control)
+/snowflake — Snowflake proxy (status + control)
 /restart\\_N — Restart container N
 /stop\\_N — Stop container N
 /start\\_N — Start container N
@@ -7886,6 +8724,35 @@ SVCEOF
         systemctl restart conduit-telegram.service 2>/dev/null || true
     fi
 
+    # Background update check (non-blocking)
+    {
+        local _utmp="/tmp/.conduit_uc_$$"
+        local _uurl="https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.sh"
+        local _hashcmd="md5sum"
+        command -v md5sum &>/dev/null || _hashcmd="sha256sum"
+        command -v $_hashcmd &>/dev/null || { rm -f "$_utmp"; exit 0; }
+        if curl -fsSL --max-time 10 -o "$_utmp" "$_uurl" 2>/dev/null && [ -s "$_utmp" ]; then
+            local _remote_hash=$($_hashcmd "$_utmp" | cut -d' ' -f1)
+            local _stored_hash=""
+            [ -f "$INSTALL_DIR/.update_hash" ] && _stored_hash=$(<"$INSTALL_DIR/.update_hash")
+            if [ -z "$_stored_hash" ]; then
+                # No stored hash (curl|bash install) — save baseline, no badge
+                echo "$_remote_hash" > "$INSTALL_DIR/.update_hash" 2>/dev/null || true
+                rm -f /tmp/.conduit_update_available
+            elif [ "$_remote_hash" != "$_stored_hash" ]; then
+                local _rv=$(grep -m1 '^VERSION=' "$_utmp" | cut -d'"' -f2)
+                if [ -n "$_rv" ] && [ "$_rv" != "$VERSION" ]; then
+                    echo "v${_rv}" > /tmp/.conduit_update_available
+                else
+                    echo "new" > /tmp/.conduit_update_available
+                fi
+            else
+                rm -f /tmp/.conduit_update_available
+            fi
+        fi
+        rm -f "$_utmp"
+    } &
+
     local redraw=true
     while true; do
         if [ "$redraw" = true ]; then
@@ -7903,7 +8770,16 @@ SVCEOF
             echo -e "  5. ▶️  Start Conduit"
             echo -e "  6. ⏹️  Stop Conduit"
             echo -e "  7. 🔁 Restart Conduit"
-            echo -e "  8. 🔄 Update Conduit"
+            local _update_badge=""
+            if [ -f /tmp/.conduit_update_available ]; then
+                local _uv=$(<"/tmp/.conduit_update_available" 2>/dev/null)
+                if [ "$_uv" = "new" ]; then
+                    _update_badge="  ${GREEN}⚡ Update available!${NC}"
+                elif [ -n "$_uv" ]; then
+                    _update_badge="  ${GREEN}⚡ ${_uv} available!${NC}"
+                fi
+            fi
+            echo -e "  8. 🔄 Update Conduit${_update_badge}"
             echo ""
             echo -e "  9. ⚙️  Settings & Tools"
             echo -e "  c. 📦 Manage containers"
@@ -7916,6 +8792,14 @@ SVCEOF
                 echo -e "  f. ❄  Snowflake Proxy [${_sf_label}]"
             else
                 echo -e "  f. ❄  Snowflake Proxy"
+            fi
+            # MTProto menu item
+            if [ "$MTPROTO_ENABLED" = "true" ]; then
+                local _mt_label="${RED}Stopped${NC}"
+                is_mtproto_running && _mt_label="${GREEN}Running${NC}"
+                echo -e "  p. 📡 Telegram MTProto Proxy [${_mt_label}]"
+            else
+                echo -e "  p. 📡 Telegram MTProto Proxy"
             fi
             echo -e "  i. ℹ️  Info & Help"
             echo -e "  0. 🚪 Exit"
@@ -7983,6 +8867,10 @@ SVCEOF
                 show_snowflake_menu
                 redraw=true
                 ;;
+            p|P)
+                show_mtproto_menu
+                redraw=true
+                ;;
             i)
                 show_info_menu
                 redraw=true
@@ -8015,9 +8903,10 @@ show_info_menu() {
             echo -e "  3. 📦 Containers & Scaling"
             echo -e "  4. 🔒 Privacy & Security"
             echo -e "  5. ❄️  Snowflake Proxy"
-            echo -e "  6. ⚖️  Safety & Legal"
-            echo -e "  7. 🚀 About Psiphon Conduit"
-            echo -e "  8. 📈 Dashboard Metrics Explained"
+            echo -e "  6. 📡 MTProto Proxy"
+            echo -e "  7. ⚖️  Safety & Legal"
+            echo -e "  8. 🚀 About Psiphon Conduit"
+            echo -e "  9. 📈 Dashboard Metrics Explained"
             echo ""
             echo -e "  [b] Back to menu"
             echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
@@ -8031,9 +8920,10 @@ show_info_menu() {
             3) _info_containers; redraw=true ;;
             4) _info_privacy; redraw=true ;;
             5) show_info_snowflake; redraw=true ;;
-            6) show_info_safety; redraw=true ;;
-            7) show_about; redraw=true ;;
-            8) show_dashboard_info; redraw=true ;;
+            6) show_info_mtproto; redraw=true ;;
+            7) show_info_safety; redraw=true ;;
+            8) show_about; redraw=true ;;
+            9) show_dashboard_info; redraw=true ;;
             b|"") break ;;
             *) echo -e "  ${RED}Invalid.${NC}"; sleep 1; redraw=true ;;
         esac
@@ -8308,6 +9198,106 @@ _remove_cred() {
     chmod 600 "$credsfile" 2>/dev/null || true
 }
 
+deploy_to_server() {
+    local ssh_host="$1" ssh_port="$2" auth_type="$3" password="$4" _sudo="$5"
+    local deploy_mc deploy_bw deploy_cc
+
+    echo ""
+    echo -e "  ${CYAN}═══ DEPLOY CONDUIT MANAGER ═══${NC}"
+    echo ""
+    echo -e "  ${DIM}Configure settings for the remote server:${NC}"
+    echo ""
+
+    read -p "  Containers (Enter=auto-detect by remote CPU/RAM, max 32): " deploy_cc < /dev/tty || true
+    deploy_cc="${deploy_cc:-0}"
+    if [ "$deploy_cc" != "0" ]; then
+        if ! [[ "$deploy_cc" =~ ^[1-9][0-9]*$ ]]; then
+            echo -e "  ${YELLOW}Invalid. Using auto-detect.${NC}"
+            deploy_cc=0
+        elif [ "$deploy_cc" -gt 32 ]; then
+            echo -e "  ${YELLOW}Maximum is 32. Setting to 32.${NC}"
+            deploy_cc=32
+        fi
+    fi
+
+    read -p "  Max clients per container (Enter=auto-detect, 1-1000): " deploy_mc < /dev/tty || true
+    deploy_mc="${deploy_mc:-0}"
+    if [ "$deploy_mc" != "0" ]; then
+        if ! [[ "$deploy_mc" =~ ^[1-9][0-9]*$ ]]; then
+            echo -e "  ${YELLOW}Invalid. Using auto-detect.${NC}"
+            deploy_mc=0
+        elif [ "$deploy_mc" -gt 1000 ]; then
+            echo -e "  ${YELLOW}Maximum is 1000. Setting to 1000.${NC}"
+            deploy_mc=1000
+        fi
+    fi
+
+    read -p "  Bandwidth per peer in Mbps (Enter=5, -1=unlimited): " deploy_bw < /dev/tty || true
+    deploy_bw="${deploy_bw:-5}"
+    if ! [[ "$deploy_bw" =~ ^-?[0-9]+$ ]] || { [ "$deploy_bw" -ne -1 ] && { [ "$deploy_bw" -lt 1 ] || [ "$deploy_bw" -gt 40 ]; }; }; then
+        echo -e "  ${YELLOW}Invalid. Using default: 5 Mbps.${NC}"
+        deploy_bw=5
+    fi
+
+    echo ""
+    echo -e "  ${DIM}Deploying Conduit Manager to remote server...${NC}"
+    echo -e "  ${DIM}This may take a few minutes (Docker install + image pull)...${NC}"
+    echo ""
+
+    # Build env var prefix for batch mode
+    local env_prefix=""
+    [ "$deploy_cc" != "0" ] && env_prefix+="CONTAINER_COUNT=$deploy_cc "
+    [ "$deploy_mc" != "0" ] && env_prefix+="MAX_CLIENTS=$deploy_mc "
+    env_prefix+="BANDWIDTH=$deploy_bw "
+
+    local install_url="https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.sh"
+    # Download then run — try curl first, fall back to wget
+    local remote_cmd="${_sudo}bash -c 'export ${env_prefix}; { curl -fsSL --max-time 60 \"${install_url}\" -o /tmp/conduit_install.sh 2>/dev/null || wget -qO /tmp/conduit_install.sh \"${install_url}\" 2>/dev/null; } && bash /tmp/conduit_install.sh --batch; _rc=\$?; rm -f /tmp/conduit_install.sh; exit \$_rc'"
+
+    if [ "$auth_type" = "pass" ]; then
+        SSHPASS="$password" sshpass -e ssh -o ConnectTimeout=10 \
+            -o PubkeyAuthentication=no \
+            -o ServerAliveInterval=30 \
+            -p "$ssh_port" "$ssh_host" "$remote_cmd" 2>&1 | while IFS= read -r line; do
+                # Show relevant progress lines
+                case "$line" in
+                    *"Step "*|*"[✓]"*|*"✓"*|*"Installing"*|*"Pulling"*|*"Started"*|*"Batch mode"*|*"created"*|*"started"*)
+                        echo -e "    ${DIM}${line}${NC}" ;;
+                esac
+            done
+    else
+        ssh -o ConnectTimeout=10 -o BatchMode=yes \
+            -o ServerAliveInterval=30 \
+            -p "$ssh_port" "$ssh_host" "$remote_cmd" 2>&1 | while IFS= read -r line; do
+                case "$line" in
+                    *"Step "*|*"[✓]"*|*"✓"*|*"Installing"*|*"Pulling"*|*"Started"*|*"Batch mode"*|*"created"*|*"started"*)
+                        echo -e "    ${DIM}${line}${NC}" ;;
+                esac
+            done
+    fi
+
+    echo ""
+    echo -e "  ${DIM}Verifying installation...${NC}"
+    local verify_cmd="${_sudo}conduit version 2>/dev/null"
+    local remote_ver=""
+    if [ "$auth_type" = "pass" ]; then
+        remote_ver=$(SSHPASS="$password" sshpass -e ssh -o ConnectTimeout=10 \
+            -o PubkeyAuthentication=no \
+            -p "$ssh_port" "$ssh_host" "$verify_cmd" 2>/dev/null)
+    else
+        remote_ver=$(ssh -o ConnectTimeout=10 -o BatchMode=yes \
+            -p "$ssh_port" "$ssh_host" "$verify_cmd" 2>/dev/null)
+    fi
+
+    if [ -n "$remote_ver" ]; then
+        echo -e "  ${GREEN}✓ Conduit Manager deployed successfully! (${remote_ver})${NC}"
+        return 0
+    else
+        echo -e "  ${RED}✗ Deployment may have failed. Check the remote server manually.${NC}"
+        return 1
+    fi
+}
+
 add_server_interactive() {
     local label conn auth_choice setup_key existing anyway
     echo -e "${CYAN}═══ ADD REMOTE SERVER ═══${NC}"
@@ -8320,8 +9310,8 @@ add_server_interactive() {
     fi
     # Check server limit
     load_servers
-    if [ "$SERVER_COUNT" -ge 9 ]; then
-        echo -e "${RED}  Maximum of 9 remote servers reached.${NC}"
+    if [ "$SERVER_COUNT" -ge 30 ]; then
+        echo -e "${RED}  Maximum of 30 remote servers reached.${NC}"
         return 1
     fi
     # Check for duplicates
@@ -8445,8 +9435,13 @@ add_server_interactive() {
                     fi
                 fi
             else
-                echo -e "  ${YELLOW}⚠ 'conduit' command not found on remote server.${NC}"
-                echo -e "  ${DIM}  Install conduit on the remote server first for full functionality.${NC}"
+                echo -e "  ${YELLOW}⚠ Conduit Manager not found on remote server.${NC}"
+                local do_deploy
+                read -p "  Deploy Conduit Manager to this server? (y/n) [y]: " do_deploy < /dev/tty || true
+                do_deploy="${do_deploy:-y}"
+                if [[ "$do_deploy" =~ ^[Yy]$ ]]; then
+                    deploy_to_server "$ssh_host" "$ssh_port" "pass" "$password" "$_sudo"
+                fi
             fi
         else
             echo -e "  ${RED}✗ Connection failed. Check password, host, and port.${NC}"
@@ -8557,8 +9552,13 @@ add_server_interactive() {
                     fi
                 fi
             else
-                echo -e "  ${YELLOW}⚠ 'conduit' command not found on remote server.${NC}"
-                echo -e "  ${DIM}  Install conduit on the remote server first for full functionality.${NC}"
+                echo -e "  ${YELLOW}⚠ Conduit Manager not found on remote server.${NC}"
+                local do_deploy
+                read -p "  Deploy Conduit Manager to this server? (y/n) [y]: " do_deploy < /dev/tty || true
+                do_deploy="${do_deploy:-y}"
+                if [[ "$do_deploy" =~ ^[Yy]$ ]]; then
+                    deploy_to_server "$ssh_host" "$ssh_port" "key" "" "$_sudo"
+                fi
             fi
         else
             echo -e "  ${RED}✗ Connection failed.${NC}"
@@ -9055,6 +10055,9 @@ show_multi_dashboard() {
     local cycle_start=$SECONDS
     local REFRESH_INTERVAL=20
     local si key
+    local _dash_page=0
+    local _page_size=10
+    local _total_pages=1
 
     declare -a SRV_STATUS SRV_CTOTAL SRV_RUNNING SRV_PEERS SRV_CING
     declare -a SRV_UP_B SRV_DN_B
@@ -9227,12 +10230,27 @@ show_multi_dashboard() {
             "$total_servers" "$g_running" "$g_ctotal" "$g_peers" "$g_up_h" "$g_dn_h" "$_t_trk_c"
 
         if [ "$SERVER_COUNT" -gt 0 ]; then
+            # Pagination: compute page bounds
+            _total_pages=$(( (SERVER_COUNT + _page_size - 1) / _page_size ))
+            [ "$_dash_page" -ge "$_total_pages" ] && _dash_page=$((_total_pages - 1))
+            [ "$_dash_page" -lt 0 ] && _dash_page=0
+            local _pg_start=$(( _dash_page * _page_size ))
+            local _pg_end=$(( _pg_start + _page_size ))
+            [ "$_pg_end" -gt "$SERVER_COUNT" ] && _pg_end=$SERVER_COUNT
+
+            local _pg_hdr=""
+            if [ "$_total_pages" -gt 1 ]; then
+                _pg_hdr="Servers $((_pg_start + 1))-${_pg_end} of ${SERVER_COUNT} (Page $((_dash_page + 1))/${_total_pages})"
+            fi
+
             echo -e "${CYAN}╠══╤════════════╤════════╤═════════╤══════════╤══════════╤═══════════╤═════════╣${NC}${EL}"
             printf "${CYAN}║${NC}${BOLD}# │ SERVER     │ STATUS │ CNT/PER │ UPLOAD   │ DNLOAD   │ CPU(TEMP) │ SERVED  ${NC}\033[80G${CYAN}║${NC}${EL}\n"
             echo -e "${CYAN}╠══╪════════════╪════════╪═════════╪══════════╪══════════╪═══════════╪═════════╣${NC}${EL}"
 
-            for ((si=0; si<SERVER_COUNT; si++)); do
-                local num=$((si + 1))
+            for ((si=_pg_start; si<_pg_end; si++)); do
+                local page_num=$(( si - _pg_start + 1 ))
+                local display_key="$page_num"
+                [ "$page_num" -eq 10 ] && display_key="0"
                 local label="${SERVER_LABELS[$si]}"
                 local st="${SRV_STATUS[$si]}"
                 local sc sd
@@ -9257,17 +10275,26 @@ show_multi_dashboard() {
                 fi
                 local served="${SRV_DATA_H[$si]:-"-"}"
 
-                printf "${CYAN}║${NC}%d │ %-10.10s │ %b%-6s${NC} │ %-7.7s │ %-8.8s │ %-8.8s │ %-9s │ %-7.7s\033[80G${CYAN}║${NC}${EL}\n" \
-                    "$num" "$label" "$sc" "$sd" \
+                printf "${CYAN}║${NC}${DIM}%-2s${NC}│ %-10.10s │ %b%-6s${NC} │ %-7.7s │ %-8.8s │ %-8.8s │ %-9s │ %-7.7s\033[80G${CYAN}║${NC}${EL}\n" \
+                    "$display_key" "$label" "$sc" "$sd" \
                     "$ctnr_peer" "$_srv_up_h" "$_srv_dn_h" "$cpu_temp" "$served"
             done
             echo -e "${CYAN}╚══╧════════════╧════════╧═════════╧══════════╧══════════╧═══════════╧═════════╝${NC}${EL}"
         else
+            _total_pages=1
+            _dash_page=0
             echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}${EL}"
             printf " ${DIM}No remote servers. Add with: conduit add-server${NC}${EL}\n"
         fi
 
-        printf " ${DIM}[q]${NC}Quit ${DIM}[r]${NC}Refresh ${DIM}[1-9]${NC}Server ${DIM}[R]${NC}estart ${DIM}[S]${NC}top ${DIM}[T]${NC}start ${DIM}[U]${NC}pdate ${DIM}[M]${NC}anage${EL}\n"
+        local _nav_keys="${DIM}[1-9${NC}"
+        local _pg_count=$(( SERVER_COUNT - _dash_page * _page_size ))
+        [ "$_pg_count" -gt "$_page_size" ] && _pg_count=$_page_size
+        [ "${_pg_count:-0}" -ge 10 ] && _nav_keys="${DIM}[0-9${NC}"
+        printf " ${DIM}[q]${NC}Quit ${DIM}[r]${NC}Refresh ${_nav_keys}${DIM}]${NC}Server ${DIM}[R]${NC}estart ${DIM}[S]${NC}top ${DIM}[T]${NC}start ${DIM}[U]${NC}pdate ${DIM}[M]${NC}anage${EL}\n"
+        if [ "$_total_pages" -gt 1 ]; then
+            printf " ${DIM}[${NC}[${DIM}]${NC}Prev ${DIM}[${NC}]${DIM}]${NC}Next  ${DIM}|${NC}  ${_pg_hdr}${EL}\n"
+        fi
         printf " Enter choice: "
         printf "\033[J"
         echo -ne "\033[?25h"
@@ -9284,10 +10311,31 @@ show_multi_dashboard() {
                 U)   [ "$SERVER_COUNT" -gt 0 ] && { _bulk_action_all "update"; last_refresh=0; } ;;
                 M|m) _dashboard_server_mgmt; last_refresh=0 ;;
                 [1-9])
-                    local idx=$((key - 1))
+                    local _pg_idx=$((key - 1))
+                    local idx=$(( _dash_page * _page_size + _pg_idx ))
                     if [ "$idx" -lt "$SERVER_COUNT" ]; then
                         _server_actions "$idx"
                         last_refresh=0
+                    fi
+                    ;;
+                0)
+                    # 0 = 10th server on current page
+                    local idx=$(( _dash_page * _page_size + 9 ))
+                    if [ "$idx" -lt "$SERVER_COUNT" ]; then
+                        _server_actions "$idx"
+                        last_refresh=0
+                    fi
+                    ;;
+                \[)
+                    # Previous page (no re-fetch, data already in memory)
+                    if [ "$_total_pages" -gt 1 ]; then
+                        _dash_page=$(( (_dash_page - 1 + _total_pages) % _total_pages ))
+                    fi
+                    ;;
+                \])
+                    # Next page (no re-fetch, data already in memory)
+                    if [ "$_total_pages" -gt 1 ]; then
+                        _dash_page=$(( (_dash_page + 1) % _total_pages ))
                     fi
                     ;;
             esac
@@ -9332,8 +10380,8 @@ _dashboard_server_mgmt() {
         case "$mgmt_key" in
             a|A)
                 echo ""
-                if [ ${#SERVER_LABELS[@]} -ge 9 ]; then
-                    echo -e "  ${YELLOW}⚠ Maximum 9 servers reached${NC}"
+                if [ ${#SERVER_LABELS[@]} -ge 30 ]; then
+                    echo -e "  ${YELLOW}⚠ Maximum 30 servers reached${NC}"
                     sleep 2
                 else
                     add_server_interactive
@@ -9538,11 +10586,13 @@ show_help() {
     echo "  restore      Restore Conduit node identity from backup"
     echo "  update-geoip Update GeoIP database"
     echo "  dashboard    Open multi-server dashboard"
-    echo "  add-server   Add a remote server"
+    echo "  add-server   Add a remote server (auto-deploys if not installed)"
+    echo "  deploy       Alias for add-server"
     echo "  edit-server  Edit server credentials or connection"
     echo "  remove-server Remove a configured remote server"
     echo "  servers      List configured remote servers"
     echo "  snowflake    Manage Snowflake proxy (status|start|stop|restart)"
+    echo "  mtproto      Manage MTProto proxy (status|start|stop|restart|link)"
     echo "  uninstall    Remove everything (container, data, service)"
     echo "  menu         Open interactive menu (default)"
     echo "  version      Show version information"
@@ -9963,6 +11013,19 @@ recreate_containers() {
 }
 
 update_conduit() {
+    local auto_mode=false
+    [ "${1:-}" = "--auto" ] && auto_mode=true
+
+    # Prevent concurrent updates (e.g. manual + cron)
+    if command -v flock &>/dev/null; then
+        local _lockfd
+        exec {_lockfd}>/tmp/.conduit_update.lock
+        if ! flock -n "$_lockfd"; then
+            echo -e "${YELLOW}Another update is already running. Please try again later.${NC}"
+            return 1
+        fi
+    fi
+
     echo -e "${CYAN}═══ UPDATE CONDUIT ═══${NC}"
     echo ""
 
@@ -9988,6 +11051,7 @@ update_conduit() {
             if [ $update_status -eq 0 ]; then
                 echo -e "  ${GREEN}✓ Script installed (v${new_version:-?})${NC}"
                 script_updated=true
+                rm -f /tmp/.conduit_update_available
             else
                 echo -e "  ${RED}✗ Installation failed${NC}"
             fi
@@ -10027,27 +11091,28 @@ update_conduit() {
     echo "$pull_output"
 
     if [ $pull_status -ne 0 ]; then
-        echo -e "${RED}Failed to check for Docker updates. Check your internet connection.${NC}"
-        echo ""
-        echo -e "${GREEN}Update complete.${NC}"
-        return 1
+        echo -e "${RED}Failed to pull Conduit image. Check your internet connection.${NC}"
     fi
 
-    if echo "$pull_output" | grep -q "Status: Image is up to date"; then
+    if [ $pull_status -eq 0 ] && echo "$pull_output" | grep -q "Status: Image is up to date"; then
         echo -e "${GREEN}Docker image is already up to date.${NC}"
-    elif echo "$pull_output" | grep -q "Downloaded newer image\|Pull complete"; then
+    elif [ $pull_status -eq 0 ] && echo "$pull_output" | grep -q "Downloaded newer image\|Pull complete"; then
         echo ""
         echo -e "${YELLOW}A new Docker image is available.${NC}"
-        echo -e "Recreating containers will cause brief downtime (~10 seconds)."
-        echo ""
-        read -p "Recreate containers with new image now? [y/N]: " answer < /dev/tty || true
-        if [[ "$answer" =~ ^[Yy]$ ]]; then
-            recreate_containers
-            echo -e "${DIM}Cleaning up old Docker images...${NC}"
-            docker image prune -f >/dev/null 2>&1 || true
-            echo -e "${GREEN}✓ Old images cleaned up${NC}"
+        if [ "$auto_mode" = "true" ]; then
+            echo -e "${CYAN}Containers will use the new image on next restart.${NC}"
         else
-            echo -e "${CYAN}Skipped. Containers will use the new image on next restart.${NC}"
+            echo -e "Recreating containers will cause brief downtime (~10 seconds)."
+            echo ""
+            read -p "Recreate containers with new image now? [y/N]: " answer < /dev/tty || true
+            if [[ "$answer" =~ ^[Yy]$ ]]; then
+                recreate_containers
+                echo -e "${DIM}Cleaning up old Docker images...${NC}"
+                docker image prune -f >/dev/null 2>&1 || true
+                echo -e "${GREEN}✓ Old images cleaned up${NC}"
+            else
+                echo -e "${CYAN}Skipped. Containers will use the new image on next restart.${NC}"
+            fi
         fi
     fi
 
@@ -10062,10 +11127,45 @@ update_conduit() {
         fi
     fi
 
+    # --- Phase 5: MTProto image update (if enabled) ---
+    if [ "$MTPROTO_ENABLED" = "true" ]; then
+        echo ""
+        echo -e "${BOLD}Phase 5: Updating MTProto proxy image...${NC}"
+        if docker pull "$MTPROTO_IMAGE" 2>/dev/null | tail -1; then
+            echo -e "  ${GREEN}✓ MTProto image up to date${NC}"
+        else
+            echo -e "  ${YELLOW}✗ Could not pull MTProto image (will retry on next start)${NC}"
+        fi
+    fi
+
     echo ""
     echo -e "${GREEN}═══ Update complete ═══${NC}"
     if [ "$script_updated" = true ]; then
         echo -e "${DIM}Note: Some changes may require restarting the menu to take effect.${NC}"
+    fi
+
+    # Clear update badge
+    rm -f /tmp/.conduit_update_available
+
+    # Auto-update setup (skip in --auto mode or if crontab unavailable)
+    if [ "$auto_mode" != "true" ] && command -v crontab &>/dev/null; then
+        echo ""
+        if crontab -l 2>/dev/null | grep -qF "conduit update --auto"; then
+            echo -e "  ${GREEN}✓ Auto-update: Enabled${NC} (every 48h at midnight)"
+            local _disable_au
+            read -p "  Disable auto-update? (y/N): " _disable_au < /dev/tty || true
+            if [[ "$_disable_au" =~ ^[Yy]$ ]]; then
+                crontab -l 2>/dev/null | grep -vF "conduit update --auto" | crontab - 2>/dev/null
+                echo -e "  ${YELLOW}Auto-update disabled${NC}"
+            fi
+        else
+            local _enable_au
+            read -p "  Set up automatic updates every 48h? (y/N): " _enable_au < /dev/tty || true
+            if [[ "$_enable_au" =~ ^[Yy]$ ]]; then
+                (crontab -l 2>/dev/null | grep -vF "conduit update --auto"; echo "0 0 */2 * * /usr/local/bin/conduit update --auto > /var/log/conduit-autoupdate.log 2>&1") | crontab - 2>/dev/null
+                echo -e "  ${GREEN}✓ Auto-update enabled${NC} (runs every 48h at midnight)"
+            fi
+        fi
     fi
 }
 
@@ -10083,7 +11183,7 @@ case "${1:-menu}" in
     start)    start_conduit "${2:-}" ;;
     stop)     stop_conduit "${2:-}" ;;
     restart)  restart_conduit ;;
-    update)   update_conduit ;;
+    update)   update_conduit "${2:-}" ;;
     update-geoip) update_geoip ;;
     peers)    show_peers ;;
     settings) change_settings ;;
@@ -10098,7 +11198,7 @@ case "${1:-menu}" in
     regen-tracker) setup_tracker_service 2>/dev/null ;;
     regen-telegram) [ "${TELEGRAM_ENABLED:-false}" = "true" ] && setup_telegram_service 2>/dev/null ;;
     dashboard)     show_multi_dashboard ;;
-    add-server)    add_server_interactive ;;
+    add-server|deploy) add_server_interactive ;;
     edit-server)   edit_server_interactive ;;
     remove-server) remove_server_interactive ;;
     servers)       list_servers ;;
@@ -10123,6 +11223,25 @@ case "${1:-menu}" in
             *)       echo "Usage: conduit snowflake [status|start|stop|restart|remove]" ;;
         esac
         ;;
+    mtproto)
+        case "${2:-status}" in
+            status)  show_mtproto_status ;;
+            start)   if [ "$MTPROTO_ENABLED" = "true" ]; then start_mtproto; else echo "MTProto not enabled."; fi ;;
+            stop)    stop_mtproto ;;
+            restart) if [ "$MTPROTO_ENABLED" = "true" ]; then restart_mtproto; else echo "MTProto not enabled."; fi ;;
+            link)    if [ "$MTPROTO_ENABLED" = "true" ] && [ -n "$MTPROTO_SECRET" ]; then get_mtproto_link; else echo "MTProto not configured."; fi ;;
+            remove)
+                stop_mtproto
+                docker rm -f "mtproto-proxy" 2>/dev/null || true
+                rm -f "$PERSIST_DIR/mtproto_traffic" 2>/dev/null
+                MTPROTO_ENABLED=false
+                MTPROTO_SECRET=""
+                save_settings
+                echo "MTProto removed."
+                ;;
+            *)  echo "Usage: conduit mtproto [status|start|stop|restart|link|remove]" ;;
+        esac
+        ;;
     menu|*)   [ -t 0 ] || { show_help; exit 0; }; show_menu ;;
 esac
 MANAGEMENT
@@ -10139,7 +11258,16 @@ MANAGEMENT
     # Force create symlink
     rm -f /usr/local/bin/conduit 2>/dev/null || true
     ln -s "$INSTALL_DIR/conduit" /usr/local/bin/conduit
-    
+
+    # Save script fingerprint for update checking
+    if [ -n "$0" ] && [ -f "$0" ]; then
+        local _hcmd="md5sum"
+        command -v md5sum &>/dev/null || _hcmd="sha256sum"
+        if command -v $_hcmd &>/dev/null; then
+            $_hcmd "$0" 2>/dev/null | cut -d' ' -f1 > "$INSTALL_DIR/.update_hash" 2>/dev/null || true
+        fi
+    fi
+
     log_success "Management script installed: conduit"
 }
 
@@ -10276,12 +11404,16 @@ show_usage() {
     echo "Options:"
     echo "  (no args)      Install or open management menu if already installed"
     echo "  --reinstall    Force fresh reinstall"
+    echo "  --batch        Non-interactive install (uses env vars or smart defaults)"
     echo "  --uninstall    Completely remove Conduit and all components"
     echo "  --help, -h     Show this help message"
+    echo ""
+    echo "Batch mode env vars: CONTAINER_COUNT, MAX_CLIENTS, BANDWIDTH"
     echo ""
     echo "Examples:"
     echo "  sudo bash $0              # Install or open menu"
     echo "  sudo bash $0 --reinstall  # Fresh install"
+    echo "  sudo bash $0 --batch      # Non-interactive install with defaults"
     echo "  sudo bash $0 --uninstall  # Remove everything"
     echo ""
     echo "After install, use: conduit"
@@ -10301,6 +11433,11 @@ main() {
             ;;
         --reinstall)
             # Force reinstall
+            FORCE_REINSTALL=true
+            ;;
+        --batch)
+            # Non-interactive install using env vars or smart defaults
+            BATCH_MODE=true
             FORCE_REINSTALL=true
             ;;
         --update-components)
@@ -10422,7 +11559,9 @@ SVCEOF
     echo ""
 
     log_info "Step 2/5: Checking for previous node identity..."
-    check_and_offer_backup_restore || true
+    if [ "$BATCH_MODE" != "true" ]; then
+        check_and_offer_backup_restore || true
+    fi
 
     echo ""
 
@@ -10449,13 +11588,15 @@ SVCEOF
 
     print_summary
 
-    read -p "Open management menu now? [Y/n] " open_menu < /dev/tty || true
-    if [[ ! "$open_menu" =~ ^[Nn]$ ]]; then
-        "$INSTALL_DIR/conduit" menu
+    if [ "$BATCH_MODE" != "true" ]; then
+        read -p "Open management menu now? [Y/n] " open_menu < /dev/tty || true
+        if [[ ! "$open_menu" =~ ^[Nn]$ ]]; then
+            "$INSTALL_DIR/conduit" menu
+        fi
     fi
 }
 #
-# REACHED END OF SCRIPT - VERSION 1.3
+# REACHED END OF SCRIPT - VERSION 1.3.1
 # ###############################################################################
 main "$@"
 
