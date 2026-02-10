@@ -1134,7 +1134,7 @@ run_snowflake_container() {
         docker pull "$SNOWFLAKE_IMAGE" 2>/dev/null || true
     fi
 
-    local actual_cpus=$(awk -v req="$sf_cpus" -v cores="$(nproc 2>/dev/null || echo 1)" \
+    local actual_cpus=$(LC_ALL=C awk -v req="$sf_cpus" -v cores="$(nproc 2>/dev/null || echo 1)" \
         'BEGIN{c=req+0; if(c>cores+0) c=cores+0; printf "%.2f",c}')
 
     local _sf_err
