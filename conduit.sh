@@ -1126,13 +1126,19 @@ run_snowflake_container() {
     local sf_mem=$(get_snowflake_memory)
 
     # Remove existing container
-    docker rm -f "$cname" 2>/dev/null || true
-    docker volume create "$vname" 2>/dev/null || true
+    docker rm -f "$cname" >/dev/null 2>&1 || true
+    docker volume create "$vname" >/dev/null 2>&1 || true
+
+    # Pull image if not available locally
+    if ! docker image inspect "$SNOWFLAKE_IMAGE" >/dev/null 2>&1; then
+        docker pull "$SNOWFLAKE_IMAGE" 2>/dev/null || true
+    fi
 
     local actual_cpus=$(awk -v req="$sf_cpus" -v cores="$(nproc 2>/dev/null || echo 1)" \
         'BEGIN{c=req+0; if(c>cores+0) c=cores+0; printf "%.2f",c}')
 
-    docker run -d \
+    local _sf_err
+    _sf_err=$(docker run -d \
         --name "$cname" \
         --restart unless-stopped \
         --log-opt max-size=10m \
@@ -1148,7 +1154,12 @@ run_snowflake_container() {
         --health-start-period=3600s \
         -v "${vname}:/var/lib/snowflake" \
         "$SNOWFLAKE_IMAGE" \
-        -metrics -metrics-address "127.0.0.1" -metrics-port "${mport}" 2>/dev/null
+        -metrics -metrics-address "127.0.0.1" -metrics-port "${mport}" 2>&1)
+    local _sf_rc=$?
+    if [ $_sf_rc -ne 0 ]; then
+        echo -e "  ${DIM}Docker: ${_sf_err}${NC}" >&2
+    fi
+    return $_sf_rc
 }
 
 stop_snowflake() {
@@ -4092,17 +4103,17 @@ start_conduit() {
 
             if [ "$needs_recreate" = true ]; then
                 echo "Settings changed for ${name}, recreating..."
-                docker rm -f "$name" 2>/dev/null || true
-                docker volume create "$vol" 2>/dev/null || true
+                docker rm -f "$name" >/dev/null 2>&1 || true
+                docker volume create "$vol" >/dev/null 2>&1 || true
                 fix_volume_permissions $i
                 run_conduit_container $i
             else
                 # Settings unchanged — just resume the stopped container
-                docker start "$name" 2>/dev/null
+                docker start "$name" >/dev/null 2>&1
             fi
         else
             # Container doesn't exist — create fresh
-            docker volume create "$vol" 2>/dev/null || true
+            docker volume create "$vol" >/dev/null 2>&1 || true
             fix_volume_permissions $i
             run_conduit_container $i
         fi
@@ -4261,12 +4272,12 @@ restart_conduit() {
                     echo -e "${RED}✗ Failed to recreate ${name}${NC}"
                 fi
             else
-                docker start "$name" 2>/dev/null
+                docker start "$name" >/dev/null 2>&1
                 echo -e "${GREEN}✓ ${name} started${NC}"
             fi
         else
             # Container doesn't exist — create fresh
-            docker volume create "$vol" 2>/dev/null || true
+            docker volume create "$vol" >/dev/null 2>&1 || true
             fix_volume_permissions $i
             run_conduit_container $i
             if [ $? -eq 0 ]; then
@@ -9903,7 +9914,7 @@ recreate_containers() {
     fi
     for i in $(seq 1 $CONTAINER_COUNT); do
         local name=$(get_container_name $i)
-        docker rm -f "$name" 2>/dev/null || true
+        docker rm -f "$name" >/dev/null 2>&1 || true
     done
     fix_volume_permissions
     for i in $(seq 1 $CONTAINER_COUNT); do
@@ -10003,6 +10014,17 @@ update_conduit() {
             echo -e "${GREEN}✓ Old images cleaned up${NC}"
         else
             echo -e "${CYAN}Skipped. Containers will use the new image on next restart.${NC}"
+        fi
+    fi
+
+    # --- Phase 4: Snowflake image update (if enabled) ---
+    if [ "$SNOWFLAKE_ENABLED" = "true" ]; then
+        echo ""
+        echo -e "${BOLD}Phase 4: Updating Snowflake proxy image...${NC}"
+        if docker pull "$SNOWFLAKE_IMAGE" 2>/dev/null | tail -1; then
+            echo -e "  ${GREEN}✓ Snowflake image up to date${NC}"
+        else
+            echo -e "  ${YELLOW}✗ Could not pull Snowflake image (will retry on next start)${NC}"
         fi
     fi
 
