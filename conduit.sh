@@ -4231,9 +4231,9 @@ restart_conduit() {
 
             if [ "$needs_recreate" = true ]; then
                 echo "Settings changed for ${name}, recreating..."
-                docker stop "$name" 2>/dev/null || true
-                docker rm "$name" 2>/dev/null || true
-                docker volume create "$vol" 2>/dev/null || true
+                docker stop "$name" >/dev/null 2>&1 || true
+                docker rm "$name" >/dev/null 2>&1 || true
+                docker volume create "$vol" >/dev/null 2>&1 || true
                 fix_volume_permissions $i
                 run_conduit_container $i
                 if [ $? -eq 0 ]; then
@@ -4242,7 +4242,7 @@ restart_conduit() {
                     echo -e "${RED}✗ Failed to recreate ${name}${NC}"
                 fi
             else
-                docker restart "$name" 2>/dev/null
+                docker restart "$name" >/dev/null 2>&1
                 echo -e "${GREEN}✓ ${name} restarted (settings unchanged)${NC}"
             fi
         elif docker ps -a 2>/dev/null | grep -q "[[:space:]]${name}$"; then
@@ -4262,8 +4262,8 @@ restart_conduit() {
             fi
             if [ "$cur_mc" != "$want_mc" ] || [ "$cur_bw" != "$want_bw" ] || [ "${cur_nano:-0}" != "$want_nano" ] || [ "${cur_memb:-0}" != "$want_memb" ]; then
                 echo "Settings changed for ${name}, recreating..."
-                docker rm "$name" 2>/dev/null || true
-                docker volume create "$vol" 2>/dev/null || true
+                docker rm "$name" >/dev/null 2>&1 || true
+                docker volume create "$vol" >/dev/null 2>&1 || true
                 fix_volume_permissions $i
                 run_conduit_container $i
                 if [ $? -eq 0 ]; then
