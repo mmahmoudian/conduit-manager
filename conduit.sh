@@ -1207,27 +1207,29 @@ get_snowflake_stats() {
     # Returns: "connections inbound_bytes outbound_bytes timeouts"
     local total_connections=0 total_inbound=0 total_outbound=0 total_timeouts=0
     local i
+    local _sf_tmpdir=$(mktemp -d /tmp/.conduit_sf.XXXXXX)
     for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
         local mport=$(get_snowflake_metrics_port $i)
-        local metrics=""
-        metrics=$(curl -s --max-time 3 "http://127.0.0.1:${mport}/internal/metrics" 2>/dev/null)
-        if [ -n "$metrics" ]; then
-            local parsed
-            parsed=$(echo "$metrics" | awk '
-                /^tor_snowflake_proxy_connections_total[{ ]/ { conns += $NF }
-                /^tor_snowflake_proxy_connection_timeouts_total / { to += $NF }
-                /^tor_snowflake_proxy_traffic_inbound_bytes_total / { ib += $NF }
-                /^tor_snowflake_proxy_traffic_outbound_bytes_total / { ob += $NF }
-                END { printf "%d %d %d %d", conns, ib, ob, to }
-            ' 2>/dev/null)
+        ( curl -s --max-time 3 "http://127.0.0.1:${mport}/internal/metrics" 2>/dev/null | awk '
+            /^tor_snowflake_proxy_connections_total[{ ]/ { conns += $NF }
+            /^tor_snowflake_proxy_connection_timeouts_total / { to += $NF }
+            /^tor_snowflake_proxy_traffic_inbound_bytes_total / { ib += $NF }
+            /^tor_snowflake_proxy_traffic_outbound_bytes_total / { ob += $NF }
+            END { printf "%d %d %d %d", conns, ib, ob, to }
+        ' > "$_sf_tmpdir/sf_$i" 2>/dev/null ) &
+    done
+    wait
+    for i in $(seq 1 ${SNOWFLAKE_COUNT:-1}); do
+        if [ -f "$_sf_tmpdir/sf_$i" ]; then
             local p_conns p_ib p_ob p_to
-            read -r p_conns p_ib p_ob p_to <<< "$parsed"
+            read -r p_conns p_ib p_ob p_to < "$_sf_tmpdir/sf_$i"
             total_connections=$((total_connections + ${p_conns:-0}))
             total_inbound=$((total_inbound + ${p_ib:-0}))
             total_outbound=$((total_outbound + ${p_ob:-0}))
             total_timeouts=$((total_timeouts + ${p_to:-0}))
         fi
     done
+    rm -rf "$_sf_tmpdir"
     # Snowflake Prometheus reports KB despite metric name saying bytes
     total_inbound=$((total_inbound * 1000))
     total_outbound=$((total_outbound * 1000))
@@ -3464,36 +3466,11 @@ get_average_connections() {
     echo "$_AVG_CONN_CACHE"
 }
 
-get_connection_snapshot() {
-    local hours_ago=$1
-    local now=$(date +%s)
-    local target=$((now - (hours_ago * 3600)))
-    local tolerance=1800
-    check_connection_history_reset
-
-    if [ ! -f "$CONNECTION_HISTORY_FILE" ]; then
-        echo "-|-"
-        return
-    fi
-
-    local result=$(awk -F'|' -v target="$target" -v tol="$tolerance" '
-        BEGIN { best_diff = tol + 1; best = "-|-" }
-        {
-            diff = ($1 > target) ? ($1 - target) : (target - $1)
-            if (diff < best_diff) {
-                best_diff = diff
-                best = $2 "|" $3
-            }
-        }
-        END { print best }
-    ' "$CONNECTION_HISTORY_FILE" 2>/dev/null)
-
-    echo "${result:--|-}"
-}
-
 declare -A _STATS_CACHE_UP _STATS_CACHE_DOWN _STATS_CACHE_CONN _STATS_CACHE_CING
 _DOCKER_STATS_CACHE=""
 _DOCKER_STATS_CYCLE=0
+_NET_SPEED_CACHE=""
+_SYSTEMD_CACHE=""
 
 status_json() {
     local ts=$(date +%s)
@@ -3816,15 +3793,14 @@ show_status() {
 
     if [ "$running_count" -gt 0 ]; then
 
-        # Run resource stat calls (docker stats cached every 2 cycles for CPU savings)
+        # Run resource stat calls (docker stats + net speed cached every 2 cycles)
         local _rs_tmpdir=$(mktemp -d /tmp/.conduit_rs.XXXXXX)
         _DOCKER_STATS_CYCLE=$(( (_DOCKER_STATS_CYCLE + 1) % 2 ))
         if [ "$_DOCKER_STATS_CYCLE" -eq 1 ] || [ -z "$_DOCKER_STATS_CACHE" ]; then
-            # Fresh fetch cycle - get new docker stats
             ( get_container_stats > "$_rs_tmpdir/cstats" ) &
+            ( get_net_speed > "$_rs_tmpdir/net" ) &
         fi
         ( get_system_stats > "$_rs_tmpdir/sys" ) &
-        ( get_net_speed > "$_rs_tmpdir/net" ) &
         wait
 
         local stats
@@ -3835,7 +3811,13 @@ show_status() {
             stats="$_DOCKER_STATS_CACHE"
         fi
         local sys_stats=$(cat "$_rs_tmpdir/sys" 2>/dev/null)
-        local net_speed=$(cat "$_rs_tmpdir/net" 2>/dev/null)
+        local net_speed
+        if [ -f "$_rs_tmpdir/net" ]; then
+            net_speed=$(cat "$_rs_tmpdir/net" 2>/dev/null)
+            _NET_SPEED_CACHE="$net_speed"
+        else
+            net_speed="$_NET_SPEED_CACHE"
+        fi
         rm -rf "$_rs_tmpdir"
 
         # Normalize App CPU (Docker % / Cores)
@@ -3887,13 +3869,23 @@ show_status() {
             if ! systemctl is-active conduit-tracker.service &>/dev/null 2>&1; then
                 record_connection_history "$connected" "$connecting"
             fi
-            # Get connection history snapshots
-            local snap_6h=$(get_connection_snapshot 6)
-            local snap_12h=$(get_connection_snapshot 12)
-            local snap_24h=$(get_connection_snapshot 24)
-            local conn_6h=$(echo "$snap_6h" | cut -d'|' -f1)
-            local conn_12h=$(echo "$snap_12h" | cut -d'|' -f1)
-            local conn_24h=$(echo "$snap_24h" | cut -d'|' -f1)
+            # Get connection history snapshots (single-pass read)
+            local conn_6h="-" conn_12h="-" conn_24h="-"
+            check_connection_history_reset
+            if [ -f "$CONNECTION_HISTORY_FILE" ]; then
+                local _snap_now=$(date +%s)
+                local _snap_result
+                _snap_result=$(awk -F'|' -v now="$_snap_now" -v tol=1800 '
+                    BEGIN { t6=now-21600; t12=now-43200; t24=now-86400; d6=tol+1; d12=tol+1; d24=tol+1; b6="-"; b12="-"; b24="-" }
+                    {
+                        d = ($1>t6) ? ($1-t6) : (t6-$1); if(d<d6){d6=d; b6=$2}
+                        d = ($1>t12) ? ($1-t12) : (t12-$1); if(d<d12){d12=d; b12=$2}
+                        d = ($1>t24) ? ($1-t24) : (t24-$1); if(d<d24){d24=d; b24=$2}
+                    }
+                    END { print b6 "|" b12 "|" b24 }
+                ' "$CONNECTION_HISTORY_FILE" 2>/dev/null)
+                IFS='|' read -r conn_6h conn_12h conn_24h <<< "$_snap_result"
+            fi
             # Display traffic and history side by side
             printf "  Upload:   ${CYAN}%-12s${NC} ${DIM}|${NC} Clients: ${DIM}6h:${NC}${GREEN}%-4s${NC} ${DIM}12h:${NC}${GREEN}%-4s${NC} ${DIM}24h:${NC}${GREEN}%s${NC}${EL}\n" \
                 "${upload:-0 B}" "${conn_6h}" "${conn_12h}" "${conn_24h}"
@@ -3986,20 +3978,28 @@ show_status() {
 
     echo -e "${EL}"
     echo -e "${CYAN}═══ AUTO-START SERVICE ═══${NC}${EL}"
-    if command -v systemctl &>/dev/null && systemctl is-enabled conduit.service 2>/dev/null | grep -q "enabled"; then
+    # Cache init system detection (doesn't change mid-session)
+    if [ -z "$_SYSTEMD_CACHE" ]; then
+        if command -v systemctl &>/dev/null && systemctl is-enabled conduit.service 2>/dev/null | grep -q "enabled"; then
+            _SYSTEMD_CACHE="systemd"
+        elif command -v rc-status &>/dev/null && rc-status -a 2>/dev/null | grep -q "conduit"; then
+            _SYSTEMD_CACHE="openrc"
+        elif [ -f /etc/init.d/conduit ]; then
+            _SYSTEMD_CACHE="sysvinit"
+        else
+            _SYSTEMD_CACHE="none"
+        fi
+    fi
+    if [ "$_SYSTEMD_CACHE" = "systemd" ]; then
         echo -e "  Auto-start:   ${GREEN}Enabled (systemd)${NC}${EL}"
-        # Use container state instead of unreliable oneshot status
-        local svc_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -cE "^conduit(-[0-9]+)?$" || echo 0)
-        if [ "${svc_containers:-0}" -gt 0 ] 2>/dev/null; then
+        if [ "$running_count" -gt 0 ]; then
             echo -e "  Service:      ${GREEN}active${NC}${EL}"
         else
             echo -e "  Service:      ${YELLOW}inactive${NC}${EL}"
         fi
-    # Check for OpenRC
-    elif command -v rc-status &>/dev/null && rc-status -a 2>/dev/null | grep -q "conduit"; then
+    elif [ "$_SYSTEMD_CACHE" = "openrc" ]; then
         echo -e "  Auto-start:   ${GREEN}Enabled (OpenRC)${NC}${EL}"
-    # Check for SysVinit
-    elif [ -f /etc/init.d/conduit ]; then
+    elif [ "$_SYSTEMD_CACHE" = "sysvinit" ]; then
         echo -e "  Auto-start:   ${GREEN}Enabled (SysVinit)${NC}${EL}"
     else
         echo -e "  Auto-start:   ${YELLOW}Not configured${NC}${EL}"
