@@ -722,6 +722,7 @@ save_settings_install() {
         _tg_interval="${TELEGRAM_INTERVAL:-6}"
         _tg_enabled="${TELEGRAM_ENABLED:-false}"
         _tg_alerts="${TELEGRAM_ALERTS_ENABLED:-true}"
+        _tg_cpu_alert="${TELEGRAM_CPU_ALERT:-true}"
         _tg_daily="${TELEGRAM_DAILY_SUMMARY:-true}"
         _tg_weekly="${TELEGRAM_WEEKLY_SUMMARY:-true}"
         _tg_label="${TELEGRAM_SERVER_LABEL:-}"
@@ -769,6 +770,7 @@ TELEGRAM_CHAT_ID="$_tg_chat"
 TELEGRAM_INTERVAL=$_tg_interval
 TELEGRAM_ENABLED=$_tg_enabled
 TELEGRAM_ALERTS_ENABLED=$_tg_alerts
+TELEGRAM_CPU_ALERT=$_tg_cpu_alert
 TELEGRAM_DAILY_SUMMARY=$_tg_daily
 TELEGRAM_WEEKLY_SUMMARY=$_tg_weekly
 TELEGRAM_SERVER_LABEL="${_tg_label//\"/}"
@@ -5536,6 +5538,7 @@ TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID"
 TELEGRAM_INTERVAL=${TELEGRAM_INTERVAL:-6}
 TELEGRAM_ENABLED=${TELEGRAM_ENABLED:-false}
 TELEGRAM_ALERTS_ENABLED=${TELEGRAM_ALERTS_ENABLED:-true}
+TELEGRAM_CPU_ALERT=${TELEGRAM_CPU_ALERT:-true}
 TELEGRAM_DAILY_SUMMARY=${TELEGRAM_DAILY_SUMMARY:-true}
 TELEGRAM_WEEKLY_SUMMARY=${TELEGRAM_WEEKLY_SUMMARY:-true}
 TELEGRAM_SERVER_LABEL="${TELEGRAM_SERVER_LABEL:-}"
@@ -6126,30 +6129,42 @@ check_alerts() {
     local now=$(date +%s)
     local cooldown=3600
 
-    # CPU + RAM check (single docker stats call)
+    # System-wide CPU check (from /proc/stat, not Docker containers)
+    if [ "${TELEGRAM_CPU_ALERT:-true}" = "true" ] && [ -f /proc/stat ]; then
+        read -r _c user nice system idle iowait irq softirq steal guest < /proc/stat
+        local total_curr=$((user + nice + system + idle + iowait + irq + softirq + steal))
+        local work_curr=$((user + nice + system + irq + softirq + steal))
+        local cpu_state="/tmp/conduit_cpu_alert_state"
+        local cpu_val=0
+        if [ -f "$cpu_state" ]; then
+            read -r total_prev work_prev < "$cpu_state"
+            local total_delta=$((total_curr - total_prev))
+            local work_delta=$((work_curr - work_prev))
+            if [ "$total_delta" -gt 0 ]; then
+                cpu_val=$(awk -v w="$work_delta" -v t="$total_delta" 'BEGIN{printf "%.0f", w*100/t}' 2>/dev/null || echo 0)
+            fi
+        fi
+        echo "$total_curr $work_curr" > "$cpu_state"
+        if [ "${cpu_val:-0}" -gt 96 ] 2>/dev/null; then
+            cpu_breach=$((cpu_breach + 1))
+        else
+            cpu_breach=0
+        fi
+        if [ "$cpu_breach" -ge 3 ] && [ $((now - last_alert_cpu)) -ge $cooldown ] 2>/dev/null; then
+            telegram_send "⚠️ *Alert: High CPU*
+System CPU at ${cpu_val}% for 3\\+ minutes"
+            last_alert_cpu=$now
+            cpu_breach=0
+        fi
+    fi
+
+    # RAM check (from Docker container stats)
     local conduit_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "^conduit" 2>/dev/null || true)
-    local stats_line=""
+    local ram_pct=""
     if [ -n "$conduit_containers" ]; then
-        stats_line=$(timeout 10 docker stats --no-stream --format "{{.CPUPerc}} {{.MemPerc}}" $conduit_containers 2>/dev/null | \
-            awk '{gsub(/%/,""); cpu+=$1; if($2+0>ram) ram=$2} END{printf "%.2f%% %.2f%%", cpu, ram}')
+        ram_pct=$(timeout 10 docker stats --no-stream --format "{{.MemPerc}}" $conduit_containers 2>/dev/null | \
+            awk '{gsub(/%/,""); if($1+0>ram) ram=$1} END{printf "%.2f%%", ram}')
     fi
-    local raw_cpu=$(echo "$stats_line" | awk '{print $1}')
-    local ram_pct=$(echo "$stats_line" | awk '{print $2}')
-
-    local cores=$(get_cpu_cores)
-    local cpu_val=$(awk "BEGIN {printf \"%.0f\", ${raw_cpu%\%} / $cores}" 2>/dev/null || echo 0)
-    if [ "${cpu_val:-0}" -gt 90 ] 2>/dev/null; then
-        cpu_breach=$((cpu_breach + 1))
-    else
-        cpu_breach=0
-    fi
-    if [ "$cpu_breach" -ge 3 ] && [ $((now - last_alert_cpu)) -ge $cooldown ] 2>/dev/null; then
-        telegram_send "⚠️ *Alert: High CPU*
-CPU usage at ${cpu_val}% for 3\\+ minutes"
-        last_alert_cpu=$now
-        cpu_breach=0
-    fi
-
     local ram_val=${ram_pct%\%}
     ram_val=${ram_val%%.*}
     if [ "${ram_val:-0}" -gt 90 ] 2>/dev/null; then
@@ -6600,6 +6615,8 @@ except Exception:
                 st_msg+="🔔 Report Interval: every ${TELEGRAM_INTERVAL:-6}h"
                 st_msg+=$'\n'
                 st_msg+="🔕 Alerts: ${TELEGRAM_ALERTS_ENABLED:-true}"
+                st_msg+=$'\n'
+                st_msg+="🌡 CPU Alert: ${TELEGRAM_CPU_ALERT:-true}"
                 telegram_send "$st_msg"
                 ;;
             /health|/health@*)
@@ -7487,15 +7504,18 @@ show_telegram_menu() {
             [ "${TELEGRAM_DAILY_SUMMARY:-true}" != "true" ] && daily_st="${RED}OFF${NC}"
             local weekly_st="${GREEN}ON${NC}"
             [ "${TELEGRAM_WEEKLY_SUMMARY:-true}" != "true" ] && weekly_st="${RED}OFF${NC}"
+            local cpu_alert_st="${GREEN}ON${NC}"
+            [ "${TELEGRAM_CPU_ALERT:-true}" != "true" ] && cpu_alert_st="${RED}OFF${NC}"
             echo -e "  1. 📩 Send test message"
             echo -e "  2. ⏱  Change interval"
             echo -e "  3. ❌ Disable notifications"
             echo -e "  4. 🔄 Reconfigure (new bot/chat)"
-            echo -e "  5. 🚨 Alerts (CPU/RAM/down):    ${alerts_st}"
-            echo -e "  6. 📋 Daily summary:            ${daily_st}"
-            echo -e "  7. 📊 Weekly summary:           ${weekly_st}"
+            echo -e "  5. 🚨 Alerts (RAM/down):        ${alerts_st}"
+            echo -e "  6. 🌡  CPU alert (>96%):         ${cpu_alert_st}"
+            echo -e "  7. 📋 Daily summary:            ${daily_st}"
+            echo -e "  8. 📊 Weekly summary:           ${weekly_st}"
             local cur_label="${TELEGRAM_SERVER_LABEL:-$(hostname 2>/dev/null || echo 'unknown')}"
-            echo -e "  8. 🏷  Server label:            ${CYAN}${cur_label}${NC}"
+            echo -e "  9. 🏷  Server label:            ${CYAN}${cur_label}${NC}"
             echo -e "  0. ← Back"
             echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
             echo ""
@@ -7564,6 +7584,18 @@ show_telegram_menu() {
                     read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
                     ;;
                 6)
+                    if [ "${TELEGRAM_CPU_ALERT:-true}" = "true" ]; then
+                        TELEGRAM_CPU_ALERT=false
+                        echo -e "  ${RED}✗ CPU alert disabled${NC}"
+                    else
+                        TELEGRAM_CPU_ALERT=true
+                        echo -e "  ${GREEN}✓ CPU alert enabled${NC}"
+                    fi
+                    save_settings
+                    telegram_start_notify
+                    read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
+                    ;;
+                7)
                     if [ "${TELEGRAM_DAILY_SUMMARY:-true}" = "true" ]; then
                         TELEGRAM_DAILY_SUMMARY=false
                         echo -e "  ${RED}✗ Daily summary disabled${NC}"
@@ -7575,7 +7607,7 @@ show_telegram_menu() {
                     telegram_start_notify
                     read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
                     ;;
-                7)
+                8)
                     if [ "${TELEGRAM_WEEKLY_SUMMARY:-true}" = "true" ]; then
                         TELEGRAM_WEEKLY_SUMMARY=false
                         echo -e "  ${RED}✗ Weekly summary disabled${NC}"
@@ -7587,7 +7619,7 @@ show_telegram_menu() {
                     telegram_start_notify
                     read -n 1 -s -r -p "  Press any key..." < /dev/tty || true
                     ;;
-                8)
+                9)
                     echo ""
                     local cur_label="${TELEGRAM_SERVER_LABEL:-$(hostname 2>/dev/null || echo 'unknown')}"
                     echo -e "  Current label: ${CYAN}${cur_label}${NC}"
