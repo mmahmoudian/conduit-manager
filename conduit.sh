@@ -8160,12 +8160,12 @@ load_servers() {
     SERVER_COUNT=0
     local conf="$INSTALL_DIR/servers.conf"
     [ -f "$conf" ] || return
-    while IFS='|' read -r label conn auth_type _rest || [ -n "$label" ]; do
-        [[ "$label" =~ ^#.*$ ]] && continue
-        [ -z "$label" ] || [ -z "$conn" ] && continue
-        SERVER_LABELS+=("$label")
-        SERVER_CONNS+=("$conn")
-        SERVER_AUTHS+=("${auth_type:-key}")
+    while IFS='|' read -r _l _c _a _rest || [ -n "$_l" ]; do
+        [[ "$_l" =~ ^#.*$ ]] && continue
+        [ -z "$_l" ] || [ -z "$_c" ] && continue
+        SERVER_LABELS+=("$_l")
+        SERVER_CONNS+=("$_c")
+        SERVER_AUTHS+=("${_a:-key}")
         SERVER_COUNT=$((SERVER_COUNT + 1))
     done < "$conf"
 }
