@@ -8777,14 +8777,15 @@ SVCEOF
                 local _stored_sha=""
                 [ -f "$_sha_file" ] && _stored_sha=$(<"$_sha_file")
                 if [ -z "$_stored_sha" ]; then
-                    echo "$_remote_sha" > "$_sha_file" 2>/dev/null || true
-                    rm -f "$_badge" 2>/dev/null
+                    # No SHA baseline (API was down during install/update) — fall through to Method 2
+                    :
                 elif [ "$_remote_sha" != "$_stored_sha" ]; then
                     echo "new" > "$_badge" 2>/dev/null
+                    _done=true
                 else
                     rm -f "$_badge" 2>/dev/null
+                    _done=true
                 fi
-                _done=true
                 ;;
             esac
         fi
@@ -11126,7 +11127,6 @@ update_conduit() {
                 echo -e "  ${GREEN}✓ Script installed (v${new_version:-?})${NC}"
                 script_updated=true
                 rm -f /tmp/.conduit_update_available
-                rm -f "$INSTALL_DIR/.update_sha" 2>/dev/null || true
             else
                 echo -e "  ${RED}✗ Installation failed${NC}"
             fi
@@ -11219,9 +11219,17 @@ update_conduit() {
         echo -e "${DIM}Note: Some changes may require restarting the menu to take effect.${NC}"
     fi
 
-    # Clear update badge and SHA baseline (re-established on next menu open)
+    # Clear update badge and save current commit SHA as baseline
     rm -f /tmp/.conduit_update_available
-    rm -f "$INSTALL_DIR/.update_sha" 2>/dev/null || true
+    local _cur_sha
+    _cur_sha=$(curl -fsSL --max-time 10 \
+        "https://api.github.com/repos/SamNet-dev/conduit-manager/commits/main" \
+        -H "Accept: application/vnd.github.sha" 2>/dev/null) || true
+    if [ -n "$_cur_sha" ] && [ ${#_cur_sha} -ge 40 ]; then
+        echo "${_cur_sha:0:40}" > "$INSTALL_DIR/.update_sha" 2>/dev/null || true
+    else
+        rm -f "$INSTALL_DIR/.update_sha" 2>/dev/null || true
+    fi
 
     # Auto-update setup (skip in --auto mode or if crontab unavailable)
     if [ "$auto_mode" != "true" ] && command -v crontab &>/dev/null; then
@@ -11343,8 +11351,16 @@ MANAGEMENT
             $_hcmd "$0" 2>/dev/null | cut -d' ' -f1 > "$INSTALL_DIR/.update_hash" 2>/dev/null || true
         fi
     fi
-    # Reset SHA baseline so next background check re-establishes it
-    rm -f "$INSTALL_DIR/.update_sha" 2>/dev/null || true
+    # Save current commit SHA as update baseline
+    local _cur_sha
+    _cur_sha=$(curl -fsSL --max-time 10 \
+        "https://api.github.com/repos/SamNet-dev/conduit-manager/commits/main" \
+        -H "Accept: application/vnd.github.sha" 2>/dev/null) || true
+    if [ -n "$_cur_sha" ] && [ ${#_cur_sha} -ge 40 ]; then
+        echo "${_cur_sha:0:40}" > "$INSTALL_DIR/.update_sha" 2>/dev/null || true
+    else
+        rm -f "$INSTALL_DIR/.update_sha" 2>/dev/null || true
+    fi
 
     log_success "Management script installed: conduit"
 }
