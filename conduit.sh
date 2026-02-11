@@ -8830,7 +8830,7 @@ SVCEOF
             echo -e "  7. 🔁 Restart Conduit"
             local _update_badge=""
             if [ -f /tmp/.conduit_update_available ]; then
-                local _uv=$(<"/tmp/.conduit_update_available" 2>/dev/null)
+                local _uv=$(cat "/tmp/.conduit_update_available" 2>/dev/null)
                 if [ "$_uv" = "new" ]; then
                     _update_badge="  ${GREEN}⚡ Update available!${NC}"
                 elif [ -n "$_uv" ]; then
