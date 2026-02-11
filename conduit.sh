@@ -3469,31 +3469,22 @@ show_peers() {
             echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════╝${NC}${EL}"
             echo -e "${EL}"
 
-            # Load tracker data
-            unset cumul_from cumul_to total_ips_count 2>/dev/null
-            declare -A cumul_from cumul_to total_ips_count
+            # Load tracker data (awk for speed — bash while-read is too slow on large files)
+            unset cumul_from cumul_to 2>/dev/null
+            declare -A cumul_from cumul_to
 
             local grand_in=0 grand_out=0
 
             if [ -s "$persist_dir/cumulative_data" ]; then
+                local _cd_parsed
+                _cd_parsed=$(awk -F'|' '$1!="" && $1!~/can.t|error/ {f=int($2+0); t=int($3+0); print $1"|"f"|"t; gi+=f; go+=t} END{print "_GI|"gi+0"|"go+0}' "$persist_dir/cumulative_data" 2>/dev/null)
                 while IFS='|' read -r c f t; do
-                    [ -z "$c" ] && continue
-                    [[ "$c" == *"can't"* || "$c" == *"error"* ]] && continue
-                    f=$(printf '%.0f' "${f:-0}" 2>/dev/null) || f=0
-                    t=$(printf '%.0f' "${t:-0}" 2>/dev/null) || t=0
-                    cumul_from["$c"]=$f
-                    cumul_to["$c"]=$t
-                    grand_in=$((grand_in + f))
-                    grand_out=$((grand_out + t))
-                done < "$persist_dir/cumulative_data"
-            fi
-
-            if [ -s "$persist_dir/cumulative_ips" ]; then
-                while IFS='|' read -r c ip; do
-                    [ -z "$c" ] && continue
-                    [[ "$c" == *"can't"* || "$c" == *"error"* ]] && continue
-                    total_ips_count["$c"]=$((${total_ips_count["$c"]:-0} + 1))
-                done < "$persist_dir/cumulative_ips"
+                    if [ "$c" = "_GI" ]; then
+                        grand_in=$f; grand_out=$t
+                    else
+                        cumul_from["$c"]=$f; cumul_to["$c"]=$t
+                    fi
+                done <<< "$_cd_parsed"
             fi
 
             # Get actual connected clients from docker logs (parallel)
@@ -3519,38 +3510,35 @@ show_peers() {
 
             echo -e "${EL}"
 
-            # Parse snapshot for speed and country distribution
-            unset snap_from_bytes snap_to_bytes snap_from_ips snap_to_ips 2>/dev/null
-            declare -A snap_from_bytes snap_to_bytes snap_from_ips snap_to_ips
+            # Parse snapshot for speed and country distribution (single awk pass)
+            unset snap_from_bytes snap_to_bytes snap_from_ip_cnt snap_to_ip_cnt 2>/dev/null
+            declare -A snap_from_bytes snap_to_bytes snap_from_ip_cnt snap_to_ip_cnt
             local snap_total_from_ips=0 snap_total_to_ips=0
             if [ -s "$persist_dir/tracker_snapshot" ]; then
-                while IFS='|' read -r dir c bytes ip; do
-                    [ -z "$c" ] && continue
-                    [[ "$c" == *"can't"* || "$c" == *"error"* ]] && continue
-                    bytes=$(printf '%.0f' "${bytes:-0}" 2>/dev/null) || bytes=0
-                    if [ "$dir" = "FROM" ]; then
-                        snap_from_bytes["$c"]=$(( ${snap_from_bytes["$c"]:-0} + bytes ))
-                        snap_from_ips["$c|$ip"]=1
-                    elif [ "$dir" = "TO" ]; then
-                        snap_to_bytes["$c"]=$(( ${snap_to_bytes["$c"]:-0} + bytes ))
-                        snap_to_ips["$c|$ip"]=1
-                    fi
-                done < "$persist_dir/tracker_snapshot"
+                local _snap_parsed
+                _snap_parsed=$(awk -F'|' '
+                    $2!="" && $2!~/can.t|error/ {
+                        if($1=="FROM") {
+                            fb[$2]+=$3+0
+                            if(!fs[$2"|"$4]++) { fc[$2]++; ft++ }
+                        } else if($1=="TO") {
+                            tb[$2]+=$3+0
+                            if(!ts[$2"|"$4]++) { tc[$2]++; tt++ }
+                        }
+                    }
+                    END {
+                        for(c in fb) print "F|"c"|"int(fb[c])"|"fc[c]+0
+                        for(c in tb) print "T|"c"|"int(tb[c])"|"tc[c]+0
+                        print "_T|"ft+0"|"tt+0"|0"
+                    }' "$persist_dir/tracker_snapshot" 2>/dev/null)
+                while IFS='|' read -r type c val1 val2; do
+                    case "$type" in
+                        F) snap_from_bytes["$c"]=$val1; snap_from_ip_cnt["$c"]=$val2 ;;
+                        T) snap_to_bytes["$c"]=$val1; snap_to_ip_cnt["$c"]=$val2 ;;
+                        _T) snap_total_from_ips=$c; snap_total_to_ips=$val1 ;;
+                    esac
+                done <<< "$_snap_parsed"
             fi
-
-            # Count unique snapshot IPs per country + totals
-            unset snap_from_ip_cnt snap_to_ip_cnt 2>/dev/null
-            declare -A snap_from_ip_cnt snap_to_ip_cnt
-            for k in "${!snap_from_ips[@]}"; do
-                local sc="${k%%|*}"
-                snap_from_ip_cnt["$sc"]=$(( ${snap_from_ip_cnt["$sc"]:-0} + 1 ))
-                snap_total_from_ips=$((snap_total_from_ips + 1))
-            done
-            for k in "${!snap_to_ips[@]}"; do
-                local sc="${k%%|*}"
-                snap_to_ip_cnt["$sc"]=$(( ${snap_to_ip_cnt["$sc"]:-0} + 1 ))
-                snap_total_to_ips=$((snap_total_to_ips + 1))
-            done
 
             # TOP 10 TRAFFIC FROM (peers connecting to you)
             echo -e "${GREEN}${BOLD} 📥 TOP 10 TRAFFIC FROM ${NC}${DIM}(peers connecting to you)${NC}${EL}"
@@ -3563,7 +3551,6 @@ show_peers() {
                     local snap_b=${snap_from_bytes[$country]:-0}
                     local speed_val=$((snap_b / 15))
                     local speed_str=$(format_bytes $speed_val)
-                    local ips_all=${total_ips_count[$country]:-0}
                     # Estimate clients per country using snapshot distribution
                     local snap_cnt=${snap_from_ip_cnt[$country]:-0}
                     local est_clients=0
@@ -3589,7 +3576,6 @@ show_peers() {
                     local snap_b=${snap_to_bytes[$country]:-0}
                     local speed_val=$((snap_b / 15))
                     local speed_str=$(format_bytes $speed_val)
-                    local ips_all=${total_ips_count[$country]:-0}
                     local snap_cnt=${snap_to_ip_cnt[$country]:-0}
                     local est_clients=0
                     if [ "$snap_total_to_ips" -gt 0 ] && [ "$snap_cnt" -gt 0 ]; then
