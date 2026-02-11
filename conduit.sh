@@ -7151,6 +7151,39 @@ except Exception:
                         telegram_answer_callback "$cb_id" "Invalid container"
                     fi
                     ;;
+                st_*)
+                    # Only respond if callback matches this server's label
+                    local _lbl="${TELEGRAM_SERVER_LABEL:-$(hostname 2>/dev/null || echo 'server')}"
+                    local _cb_lbl=$(echo "$_lbl" | tr -cd 'a-zA-Z0-9_-' | head -c 50)
+                    [ -z "$_cb_lbl" ] && _cb_lbl=$(hostname 2>/dev/null | tr -cd 'a-zA-Z0-9_-' | head -c 50)
+                    [ -z "$_cb_lbl" ] && _cb_lbl="server"
+                    if [ "$cb_data" = "st_${_cb_lbl}" ]; then
+                        telegram_answer_callback "$cb_id" "Fetching status..."
+                        local report=$(build_report)
+                        telegram_send "$report"
+                    fi
+                    ;;
+                pr_*)
+                    # Only respond if callback matches this server's label
+                    local _lbl="${TELEGRAM_SERVER_LABEL:-$(hostname 2>/dev/null || echo 'server')}"
+                    local _cb_lbl=$(echo "$_lbl" | tr -cd 'a-zA-Z0-9_-' | head -c 50)
+                    [ -z "$_cb_lbl" ] && _cb_lbl=$(hostname 2>/dev/null | tr -cd 'a-zA-Z0-9_-' | head -c 50)
+                    [ -z "$_cb_lbl" ] && _cb_lbl="server"
+                    if [ "$cb_data" = "pr_${_cb_lbl}" ]; then
+                        telegram_answer_callback "$cb_id" "Fetching peers..."
+                        local total_peers=0
+                        local total_cing=0
+                        for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
+                            local cname=$(get_container_name $i)
+                            local last_stat=$(timeout 5 docker logs --tail 400 "$cname" 2>&1 | grep "\[STATS\]" | tail -1)
+                            local peers=$(echo "$last_stat" | awk '{for(j=1;j<=NF;j++){if($j=="Connected:") print $(j+1)+0}}' | head -1)
+                            local cing=$(echo "$last_stat" | awk '{for(j=1;j<=NF;j++){if($j=="Connecting:") print $(j+1)+0}}' | head -1)
+                            total_peers=$((total_peers + ${peers:-0}))
+                            total_cing=$((total_cing + ${cing:-0}))
+                        done
+                        telegram_send "👥 Clients: ${total_peers} connected, ${total_cing} connecting"
+                    fi
+                    ;;
                 *)
                     telegram_answer_callback "$cb_id" ""
                     ;;
@@ -7162,21 +7195,22 @@ except Exception:
         local cmd="$field2"
         case "$cmd" in
             /status|/status@*)
-                local report=$(build_report)
-                telegram_send "$report"
+                local _lbl="${TELEGRAM_SERVER_LABEL:-$(hostname 2>/dev/null || echo 'server')}"
+                local _cb_lbl=$(echo "$_lbl" | tr -cd 'a-zA-Z0-9_-' | head -c 50)
+                [ -z "$_cb_lbl" ] && _cb_lbl=$(hostname 2>/dev/null | tr -cd 'a-zA-Z0-9_-' | head -c 50)
+                [ -z "$_cb_lbl" ] && _cb_lbl="server"
+                local _lbl_j=$(printf '%s' "$_lbl" | sed 's/\\/\\\\/g; s/"/\\"/g')
+                local kb="{\"inline_keyboard\":[[{\"text\":\"📊 ${_lbl_j}\",\"callback_data\":\"st_${_cb_lbl}\"}]]}"
+                telegram_send_inline_keyboard "Tap to view status:" "$kb"
                 ;;
             /peers|/peers@*)
-                local total_peers=0
-                local total_cing=0
-                for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
-                    local cname=$(get_container_name $i)
-                    local last_stat=$(timeout 5 docker logs --tail 400 "$cname" 2>&1 | grep "\[STATS\]" | tail -1)
-                    local peers=$(echo "$last_stat" | awk '{for(j=1;j<=NF;j++){if($j=="Connected:") print $(j+1)+0}}' | head -1)
-                    local cing=$(echo "$last_stat" | awk '{for(j=1;j<=NF;j++){if($j=="Connecting:") print $(j+1)+0}}' | head -1)
-                    total_peers=$((total_peers + ${peers:-0}))
-                    total_cing=$((total_cing + ${cing:-0}))
-                done
-                telegram_send "👥 Clients: ${total_peers} connected, ${total_cing} connecting"
+                local _lbl="${TELEGRAM_SERVER_LABEL:-$(hostname 2>/dev/null || echo 'server')}"
+                local _cb_lbl=$(echo "$_lbl" | tr -cd 'a-zA-Z0-9_-' | head -c 50)
+                [ -z "$_cb_lbl" ] && _cb_lbl=$(hostname 2>/dev/null | tr -cd 'a-zA-Z0-9_-' | head -c 50)
+                [ -z "$_cb_lbl" ] && _cb_lbl="server"
+                local _lbl_j=$(printf '%s' "$_lbl" | sed 's/\\/\\\\/g; s/"/\\"/g')
+                local kb="{\"inline_keyboard\":[[{\"text\":\"👥 ${_lbl_j}\",\"callback_data\":\"pr_${_cb_lbl}\"}]]}"
+                telegram_send_inline_keyboard "Tap to view peers:" "$kb"
                 ;;
             /uptime|/uptime@*)
                 local ut_msg="⏱ *Uptime Report*"
