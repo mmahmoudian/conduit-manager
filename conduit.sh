@@ -6507,15 +6507,28 @@ telegram_build_report() {
 
     local snap_file_peers="$INSTALL_DIR/traffic_stats/tracker_snapshot"
     if [ -s "$snap_file_peers" ]; then
-        local top_peers
-        top_peers=$(awk -F'|' '{if($2!="" && $4!="" && !seen[$4]++) cnt[$2]++} END{for(c in cnt) print cnt[c]"|"c}' "$snap_file_peers" 2>/dev/null | sort -t'|' -k1 -nr | head -3)
-        if [ -n "$top_peers" ]; then
+        local all_peers
+        all_peers=$(awk -F'|' '{if($2!="" && $4!="" && !seen[$4]++) cnt[$2]++} END{for(c in cnt) print cnt[c]"|"c}' "$snap_file_peers" 2>/dev/null | sort -t'|' -k1 -nr)
+        if [ -n "$all_peers" ]; then
+            local snap_total=0
+            while IFS='|' read -r cnt co; do
+                snap_total=$((snap_total + cnt))
+            done <<< "$all_peers"
+            [ "$snap_total" -eq 0 ] && snap_total=1
+            local dash_clients=$((total_peers))
+            local top_peers=$(echo "$all_peers" | head -3)
             report+="🗺 Top by peers:"
             report+=$'\n'
             while IFS='|' read -r cnt country; do
                 [ -z "$country" ] && continue
                 local safe_c=$(escape_telegram_markdown "$country")
-                report+="  • ${safe_c}: ${cnt} clients"
+                local pct=$((cnt * 100 / snap_total))
+                local est=$cnt
+                if [ "$dash_clients" -gt 0 ]; then
+                    est=$(( (cnt * dash_clients) / snap_total ))
+                    [ "$est" -eq 0 ] && [ "$cnt" -gt 0 ] && est=1
+                fi
+                report+="  • ${safe_c}: ${pct}% (${est} clients)"
                 report+=$'\n'
             done <<< "$top_peers"
         fi
@@ -7922,15 +7935,28 @@ build_report() {
 
     local snap_file="$INSTALL_DIR/traffic_stats/tracker_snapshot"
     if [ -s "$snap_file" ]; then
-        local top_peers
-        top_peers=$(awk -F'|' '{if($2!="" && $4!="" && !seen[$4]++) cnt[$2]++} END{for(c in cnt) print cnt[c]"|"c}' "$snap_file" 2>/dev/null | sort -t'|' -k1 -nr | head -3)
-        if [ -n "$top_peers" ]; then
+        local all_peers
+        all_peers=$(awk -F'|' '{if($2!="" && $4!="" && !seen[$4]++) cnt[$2]++} END{for(c in cnt) print cnt[c]"|"c}' "$snap_file" 2>/dev/null | sort -t'|' -k1 -nr)
+        if [ -n "$all_peers" ]; then
+            local snap_total=0
+            while IFS='|' read -r cnt co; do
+                snap_total=$((snap_total + cnt))
+            done <<< "$all_peers"
+            [ "$snap_total" -eq 0 ] && snap_total=1
+            local dash_clients=$((total_peers))
+            local top_peers=$(echo "$all_peers" | head -3)
             report+="🗺 Top by peers:"
             report+=$'\n'
             while IFS='|' read -r cnt country; do
                 [ -z "$country" ] && continue
                 local safe_c=$(escape_md "$country")
-                report+="  • ${safe_c}: ${cnt} clients"
+                local pct=$((cnt * 100 / snap_total))
+                local est=$cnt
+                if [ "$dash_clients" -gt 0 ]; then
+                    est=$(( (cnt * dash_clients) / snap_total ))
+                    [ "$est" -eq 0 ] && [ "$cnt" -gt 0 ] && est=1
+                fi
+                report+="  • ${safe_c}: ${pct}% (${est} clients)"
                 report+=$'\n'
             done <<< "$top_peers"
         fi
