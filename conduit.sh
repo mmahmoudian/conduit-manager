@@ -8772,45 +8772,73 @@ SVCEOF
 
     # Background update check (non-blocking)
     {
-        local _utmp="/tmp/.conduit_uc_$$"
-        local _uurl="https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.sh"
-        local _hashcmd="md5sum"
-        command -v md5sum &>/dev/null || _hashcmd="sha256sum"
-        command -v $_hashcmd &>/dev/null || { rm -f "$_utmp"; exit 0; }
-        if curl -fsSL --max-time 10 -o "$_utmp" "$_uurl" 2>/dev/null && [ -s "$_utmp" ]; then
-            local _remote_hash=$($_hashcmd "$_utmp" | cut -d' ' -f1)
-            local _stored_hash=""
-            [ -f "$INSTALL_DIR/.update_hash" ] && _stored_hash=$(<"$INSTALL_DIR/.update_hash")
-            if [ -z "$_stored_hash" ]; then
-                # No stored hash — check version to distinguish fresh vs old install
-                local _rv=$(grep -m1 '^VERSION=' "$_utmp" | cut -d'"' -f2)
-                if [ -n "$_rv" ] && [ "$_rv" = "$VERSION" ]; then
-                    # Same version = likely fresh install — save baseline, no badge
-                    echo "$_remote_hash" > "$INSTALL_DIR/.update_hash" 2>/dev/null || true
-                    rm -f /tmp/.conduit_update_available
+        local _badge="/tmp/.conduit_update_available"
+        local _sha_file="$INSTALL_DIR/.update_sha"
+        local _done=false
+
+        # Method 1: Lightweight GitHub API check (~40B vs ~530KB full file)
+        local _api_resp
+        _api_resp=$(curl -fsSL --connect-timeout 5 --max-time 10 \
+            "https://api.github.com/repos/SamNet-dev/conduit-manager/commits/main" \
+            -H "Accept: application/vnd.github.sha" 2>/dev/null) || true
+        if [ -n "$_api_resp" ] && [ ${#_api_resp} -ge 40 ]; then
+            local _remote_sha="${_api_resp:0:40}"
+            # Validate response is hex (not a JSON error or HTML from a proxy)
+            case "$_remote_sha" in *[!a-f0-9]*)
+                # Not a valid SHA, skip to Method 2
+                ;;
+            *)
+                local _stored_sha=""
+                [ -f "$_sha_file" ] && _stored_sha=$(<"$_sha_file")
+                if [ -z "$_stored_sha" ]; then
+                    echo "$_remote_sha" > "$_sha_file" 2>/dev/null || true
+                    rm -f "$_badge" 2>/dev/null
+                elif [ "$_remote_sha" != "$_stored_sha" ]; then
+                    echo "new" > "$_badge" 2>/dev/null
                 else
-                    # Different version = old install without hash — show badge
-                    if [ -n "$_rv" ]; then
-                        echo "v${_rv}" > /tmp/.conduit_update_available
-                    else
-                        echo "new" > /tmp/.conduit_update_available
-                    fi
+                    rm -f "$_badge" 2>/dev/null
                 fi
-                rm -f "$_utmp"
-                exit 0
-            fi
-            if [ "$_remote_hash" != "$_stored_hash" ]; then
-                local _rv=$(grep -m1 '^VERSION=' "$_utmp" | cut -d'"' -f2)
-                if [ -n "$_rv" ] && [ "$_rv" != "$VERSION" ]; then
-                    echo "v${_rv}" > /tmp/.conduit_update_available
-                else
-                    echo "new" > /tmp/.conduit_update_available
-                fi
-            else
-                rm -f /tmp/.conduit_update_available
-            fi
+                _done=true
+                ;;
+            esac
         fi
-        rm -f "$_utmp"
+
+        # Method 2: Full file hash comparison (fallback if API unreachable)
+        if [ "$_done" != "true" ]; then
+            local _utmp="/tmp/.conduit_uc_$$"
+            local _uurl="https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.sh"
+            local _hashcmd="md5sum"
+            command -v md5sum &>/dev/null || _hashcmd="sha256sum"
+            command -v $_hashcmd &>/dev/null || { rm -f "$_utmp"; exit 0; }
+            if curl -fsSL --connect-timeout 5 --max-time 30 -o "$_utmp" "$_uurl" 2>/dev/null && [ -s "$_utmp" ]; then
+                local _remote_hash=$($_hashcmd "$_utmp" | cut -d' ' -f1)
+                local _stored_hash=""
+                [ -f "$INSTALL_DIR/.update_hash" ] && _stored_hash=$(<"$INSTALL_DIR/.update_hash")
+                if [ -z "$_stored_hash" ]; then
+                    local _rv=$(grep -m1 '^VERSION=' "$_utmp" | cut -d'"' -f2)
+                    if [ -n "$_rv" ] && [ "$_rv" = "$VERSION" ]; then
+                        echo "$_remote_hash" > "$INSTALL_DIR/.update_hash" 2>/dev/null || true
+                        rm -f "$_badge" 2>/dev/null
+                    else
+                        if [ -n "$_rv" ]; then
+                            echo "v${_rv}" > "$_badge" 2>/dev/null
+                        else
+                            echo "new" > "$_badge" 2>/dev/null
+                        fi
+                    fi
+                elif [ "$_remote_hash" != "$_stored_hash" ]; then
+                    local _rv=$(grep -m1 '^VERSION=' "$_utmp" | cut -d'"' -f2)
+                    if [ -n "$_rv" ] && [ "$_rv" != "$VERSION" ]; then
+                        echo "v${_rv}" > "$_badge" 2>/dev/null
+                    else
+                        echo "new" > "$_badge" 2>/dev/null
+                    fi
+                else
+                    rm -f "$_badge" 2>/dev/null
+                fi
+            fi
+            rm -f "$_utmp"
+        fi
     } &
 
     local redraw=true
@@ -11112,6 +11140,7 @@ update_conduit() {
                 echo -e "  ${GREEN}✓ Script installed (v${new_version:-?})${NC}"
                 script_updated=true
                 rm -f /tmp/.conduit_update_available
+                rm -f "$INSTALL_DIR/.update_sha" 2>/dev/null || true
             else
                 echo -e "  ${RED}✗ Installation failed${NC}"
             fi
@@ -11204,8 +11233,9 @@ update_conduit() {
         echo -e "${DIM}Note: Some changes may require restarting the menu to take effect.${NC}"
     fi
 
-    # Clear update badge
+    # Clear update badge and SHA baseline (re-established on next menu open)
     rm -f /tmp/.conduit_update_available
+    rm -f "$INSTALL_DIR/.update_sha" 2>/dev/null || true
 
     # Auto-update setup (skip in --auto mode or if crontab unavailable)
     if [ "$auto_mode" != "true" ] && command -v crontab &>/dev/null; then
@@ -11327,6 +11357,8 @@ MANAGEMENT
             $_hcmd "$0" 2>/dev/null | cut -d' ' -f1 > "$INSTALL_DIR/.update_hash" 2>/dev/null || true
         fi
     fi
+    # Reset SHA baseline so next background check re-establishes it
+    rm -f "$INSTALL_DIR/.update_sha" 2>/dev/null || true
 
     log_success "Management script installed: conduit"
 }
