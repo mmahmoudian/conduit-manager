@@ -553,7 +553,7 @@ install_docker() {
     fi
 
     if [ "$OS_FAMILY" = "alpine" ]; then
-        if ! setup-apkrepos -c &>/dev/null; then
+        if ! setup-apkrepos -c -1 &>/dev/null; then
             log_error "Failed to enable community repository on Alpine"
         fi
         
