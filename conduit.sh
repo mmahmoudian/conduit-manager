@@ -553,6 +553,10 @@ install_docker() {
     fi
 
     if [ "$OS_FAMILY" = "alpine" ]; then
+        if ! setup-apkrepos -c -1 &>/dev/null; then
+            log_error "Failed to enable community repository on Alpine"
+        fi
+        
         if ! apk add --no-cache docker docker-cli-compose 2>/dev/null; then
             log_error "Failed to install Docker on Alpine"
             return 1
@@ -595,7 +599,6 @@ install_docker() {
         return 1
     fi
 }
-
 
 # Check for backup keys and offer restore during install
 check_and_offer_backup_restore() {
