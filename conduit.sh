@@ -3190,10 +3190,10 @@ show_advanced_stats() {
         local cycle_elapsed=$(( (now - cycle_start) % 15 ))
         local time_until_next=$((15 - cycle_elapsed))
 
-        # Build progress bar
-        local bar=""
-        for ((i=0; i<cycle_elapsed; i++)); do bar+="●"; done
-        for ((i=cycle_elapsed; i<15; i++)); do bar+="○"; done
+        # Build progress bar (no loop)
+        local _filled=$(printf '%*s' "$cycle_elapsed" '' | sed 's/ /●/g')
+        local _empty=$(printf '%*s' "$((15 - cycle_elapsed))" '' | sed 's/ /○/g')
+        local bar="${_filled}${_empty}"
 
         # Refresh data every 15 seconds or first run
         if [ $((now - last_refresh)) -ge 15 ] || [ "$last_refresh" -eq 0 ]; then
@@ -3233,59 +3233,44 @@ show_advanced_stats() {
             wait
             [ -f "$_adv_tmpdir/stats" ] && adv_all_stats=$(cat "$_adv_tmpdir/stats")
 
+            # Parse all container stats + logs in one awk pass each (avoid per-container subshells)
+            if [ -n "$adv_all_stats" ]; then
+                local _parsed
+                _parsed=$(awk -F'|' '{
+                    cpu=$2; gsub(/%/,"",cpu)
+                    split($3,mp,"/"); mem=mp[1]; lim=mp[2]
+                    gsub(/^[ \t]+|[ \t]+$/,"",mem); gsub(/^[ \t]+|[ \t]+$/,"",lim)
+                    mval=mem+0; munit=mem; gsub(/[0-9. ]/,"",munit)
+                    if(munit=="GiB") mval*=1024; else if(munit=="KiB") mval/=1024
+                    tc+=cpu+0; tm+=mval; n++
+                    if(fl=="") fl=lim
+                } END {printf "%.2f|%.2f|%d|%s", tc, tm, n, fl}' <<< "$adv_all_stats")
+                total_cpu=${_parsed%%|*}; _parsed=${_parsed#*|}
+                total_mem_mib=${_parsed%%|*}; _parsed=${_parsed#*|}
+                container_count=${_parsed%%|*}
+                first_mem_limit=${_parsed#*|}
+            fi
+
+            # Parse all log files in one pass (connected, up, down per container)
             for ci in $(seq 1 $CONTAINER_COUNT); do
-                local cname=$(get_container_name $ci)
-                if echo "$docker_ps_cache" | grep -q "^${cname}$"; then
-                    container_count=$((container_count + 1))
-
-                    local stats=$(echo "$adv_all_stats" | grep "^${cname}|" 2>/dev/null)
-                    local cpu=$(echo "$stats" | cut -d'|' -f2 | tr -d '%')
-                    [[ "$cpu" =~ ^[0-9.]+$ ]] && total_cpu=$(awk -v a="$total_cpu" -v b="$cpu" 'BEGIN{printf "%.2f", a+b}')
-
-                    local cmem_str=$(echo "$stats" | cut -d'|' -f3 | awk '{print $1}')
-                    local cmem_val=$(echo "$cmem_str" | sed 's/[^0-9.]//g')
-                    local cmem_unit=$(echo "$cmem_str" | sed 's/[0-9.]//g')
-                    if [[ "$cmem_val" =~ ^[0-9.]+$ ]]; then
-                        case "$cmem_unit" in
-                            GiB) cmem_val=$(awk -v v="$cmem_val" 'BEGIN{printf "%.2f", v*1024}') ;;
-                            KiB) cmem_val=$(awk -v v="$cmem_val" 'BEGIN{printf "%.2f", v/1024}') ;;
-                        esac
-                        total_mem_mib=$(awk -v a="$total_mem_mib" -v b="$cmem_val" 'BEGIN{printf "%.2f", a+b}')
-                    fi
-                    [ -z "$first_mem_limit" ] && first_mem_limit=$(echo "$stats" | cut -d'|' -f3 | awk -F'/' '{print $2}' | xargs)
-
-                    local logs=""
-                    [ -f "$_adv_tmpdir/logs_${ci}" ] && logs=$(cat "$_adv_tmpdir/logs_${ci}")
-                    local conn=$(echo "$logs" | sed -n 's/.*Connected:[[:space:]]*\([0-9]*\).*/\1/p')
-                    [[ "$conn" =~ ^[0-9]+$ ]] && total_conn=$((total_conn + conn))
-
-                    # Parse upload/download to bytes
-                    local up_raw=$(echo "$logs" | sed -n 's/.*Up:[[:space:]]*\([^|]*\).*/\1/p' | xargs)
-                    local down_raw=$(echo "$logs" | sed -n 's/.*Down:[[:space:]]*\([^|]*\).*/\1/p' | xargs)
-                    if [ -n "$up_raw" ]; then
-                        local up_val=$(echo "$up_raw" | sed 's/[^0-9.]//g')
-                        local up_unit=$(echo "$up_raw" | sed 's/[0-9. ]//g')
-                        if [[ "$up_val" =~ ^[0-9.]+$ ]]; then
-                            case "$up_unit" in
-                                GB) total_up_bytes=$(awk -v a="$total_up_bytes" -v v="$up_val" 'BEGIN{printf "%.0f", a+v*1073741824}') ;;
-                                MB) total_up_bytes=$(awk -v a="$total_up_bytes" -v v="$up_val" 'BEGIN{printf "%.0f", a+v*1048576}') ;;
-                                KB) total_up_bytes=$(awk -v a="$total_up_bytes" -v v="$up_val" 'BEGIN{printf "%.0f", a+v*1024}') ;;
-                                B)  total_up_bytes=$(awk -v a="$total_up_bytes" -v v="$up_val" 'BEGIN{printf "%.0f", a+v}') ;;
-                            esac
-                        fi
-                    fi
-                    if [ -n "$down_raw" ]; then
-                        local down_val=$(echo "$down_raw" | sed 's/[^0-9.]//g')
-                        local down_unit=$(echo "$down_raw" | sed 's/[0-9. ]//g')
-                        if [[ "$down_val" =~ ^[0-9.]+$ ]]; then
-                            case "$down_unit" in
-                                GB) total_down_bytes=$(awk -v a="$total_down_bytes" -v v="$down_val" 'BEGIN{printf "%.0f", a+v*1073741824}') ;;
-                                MB) total_down_bytes=$(awk -v a="$total_down_bytes" -v v="$down_val" 'BEGIN{printf "%.0f", a+v*1048576}') ;;
-                                KB) total_down_bytes=$(awk -v a="$total_down_bytes" -v v="$down_val" 'BEGIN{printf "%.0f", a+v*1024}') ;;
-                                B)  total_down_bytes=$(awk -v a="$total_down_bytes" -v v="$down_val" 'BEGIN{printf "%.0f", a+v}') ;;
-                            esac
-                        fi
-                    fi
+                if [ -f "$_adv_tmpdir/logs_${ci}" ] && [ -s "$_adv_tmpdir/logs_${ci}" ]; then
+                    local _lp
+                    _lp=$(awk '{
+                        for(i=1;i<=NF;i++){
+                            if($i=="Connected:") c=$(i+1)+0
+                            if($i=="Up:"){v=$(i+1)+0; u=$(i+2); gsub(/[^A-Za-z]/,"",u)
+                                if(u=="GB") ub=v*1073741824; else if(u=="MB") ub=v*1048576
+                                else if(u=="KB") ub=v*1024; else ub=v}
+                            if($i=="Down:"){v=$(i+1)+0; u=$(i+2); gsub(/[^A-Za-z]/,"",u)
+                                if(u=="GB") db=v*1073741824; else if(u=="MB") db=v*1048576
+                                else if(u=="KB") db=v*1024; else db=v}
+                        }
+                    } END {printf "%d|%.0f|%.0f", c+0, ub+0, db+0}' "$_adv_tmpdir/logs_${ci}")
+                    local _lconn=${_lp%%|*}; _lp=${_lp#*|}
+                    local _lup=${_lp%%|*}; local _ldown=${_lp#*|}
+                    total_conn=$((total_conn + _lconn))
+                    total_up_bytes=$((total_up_bytes + _lup))
+                    total_down_bytes=$((total_down_bytes + _ldown))
                 fi
             done
             rm -rf "$_adv_tmpdir"
@@ -3307,36 +3292,40 @@ show_advanced_stats() {
                 echo -e "${CYAN}║${NC} ${RED}No Containers Running${NC}\033[K"
             fi
 
-            # Network info
-            local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
-            local iface=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
+            # Network info (single ip route call)
+            local _netinfo=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++){if($i=="src")s=$(i+1);if($i=="dev")d=$(i+1)}} END{print s"|"d}')
+            local ip="${_netinfo%%|*}" iface="${_netinfo#*|}"
             printf "${CYAN}║${NC} Net: ${GREEN}%s${NC} (%s)\033[K\n" "${ip:-N/A}" "${iface:-?}"
 
             echo -e "${CYAN}╠${D}${NC}\033[K"
 
-            # Load tracker data
+            # Load tracker data (awk for speed — bash while-read is too slow on large files)
             local total_active=0 total_in=0 total_out=0
             unset cips cbw_in cbw_out
             declare -A cips cbw_in cbw_out
 
             if [ -s "$persist_dir/cumulative_data" ]; then
-                while IFS='|' read -r country from_bytes to_bytes; do
-                    [ -z "$country" ] && continue
-                    from_bytes=$(printf '%.0f' "${from_bytes:-0}" 2>/dev/null) || from_bytes=0
-                    to_bytes=$(printf '%.0f' "${to_bytes:-0}" 2>/dev/null) || to_bytes=0
-                    cbw_in["$country"]=$from_bytes
-                    cbw_out["$country"]=$to_bytes
-                    total_in=$((total_in + from_bytes))
-                    total_out=$((total_out + to_bytes))
-                done < "$persist_dir/cumulative_data"
+                local _cd_parsed
+                _cd_parsed=$(awk -F'|' '$1!="" && $1!~/can.t|error/ {f=int($2+0); t=int($3+0); print $1"|"f"|"t; gi+=f; go+=t} END{print "_GI|"gi+0"|"go+0}' "$persist_dir/cumulative_data" 2>/dev/null)
+                while IFS='|' read -r _c _f _t; do
+                    if [ "$_c" = "_GI" ]; then
+                        total_in=$_f; total_out=$_t
+                    else
+                        cbw_in["$_c"]=$_f; cbw_out["$_c"]=$_t
+                    fi
+                done <<< "$_cd_parsed"
             fi
 
             if [ -s "$persist_dir/cumulative_ips" ]; then
-                while IFS='|' read -r country ip_addr; do
-                    [ -z "$country" ] && continue
-                    cips["$country"]=$((${cips["$country"]:-0} + 1))
-                    total_active=$((total_active + 1))
-                done < "$persist_dir/cumulative_ips"
+                local _ip_parsed
+                _ip_parsed=$(awk -F'|' '$1!="" {a[$1]++; t++} END{for(c in a) print c"|"a[c]; print "_GT|"t+0}' "$persist_dir/cumulative_ips" 2>/dev/null)
+                while IFS='|' read -r _c _n; do
+                    if [ "$_c" = "_GT" ]; then
+                        total_active=$_n
+                    else
+                        cips["$_c"]=$_n
+                    fi
+                done <<< "$_ip_parsed"
             fi
 
             local tstat="${RED}Off${NC}"; is_tracker_active && tstat="${GREEN}On${NC}"
@@ -3351,7 +3340,7 @@ show_advanced_stats() {
                     [ "$peers" -eq 0 ] && [ "$active_cnt" -gt 0 ] && peers=1
                     local pct=$((peers * 100 / total_conn))
                     local blen=$((pct / 8)); [ "$blen" -lt 1 ] && blen=1; [ "$blen" -gt 14 ] && blen=14
-                    local bfill=""; for ((i=0; i<blen; i++)); do bfill+="█"; done
+                    local bfill=$(printf '%*s' "$blen" '' | sed 's/ /█/g')
                     printf "${CYAN}║${NC} %-16.16s %3d%% ${CYAN}%-14s${NC} (%s IPs)\033[K\n" "$country" "$pct" "$bfill" "$(format_number $peers)"
                 done
             elif [ "$total_traffic" -gt 0 ]; then
@@ -3361,7 +3350,7 @@ show_advanced_stats() {
                 done | sort -t'|' -k1 -nr | head -7 | while IFS='|' read -r bytes country; do
                     local pct=$((bytes * 100 / total_traffic))
                     local blen=$((pct / 8)); [ "$blen" -lt 1 ] && blen=1; [ "$blen" -gt 14 ] && blen=14
-                    local bfill=""; for ((i=0; i<blen; i++)); do bfill+="█"; done
+                    local bfill=$(printf '%*s' "$blen" '' | sed 's/ /█/g')
                     printf "${CYAN}║${NC} %-16.16s %3d%% ${CYAN}%-14s${NC} (%9s)\033[K\n" "$country" "$pct" "$bfill" "by traffic"
                 done
             else
@@ -3374,7 +3363,7 @@ show_advanced_stats() {
                 for c in "${!cbw_in[@]}"; do echo "${cbw_in[$c]}|$c"; done | sort -t'|' -k1 -nr | head -7 | while IFS='|' read -r bytes country; do
                     local pct=$((bytes * 100 / total_in))
                     local blen=$((pct / 8)); [ "$blen" -lt 1 ] && blen=1; [ "$blen" -gt 14 ] && blen=14
-                    local bfill=""; for ((i=0; i<blen; i++)); do bfill+="█"; done
+                    local bfill=$(printf '%*s' "$blen" '' | sed 's/ /█/g')
                     printf "${CYAN}║${NC} %-16.16s %3d%% ${GREEN}%-14s${NC} (%9s)\033[K\n" "$country" "$pct" "$bfill" "$(format_bytes $bytes)"
                 done
             else
@@ -3387,7 +3376,7 @@ show_advanced_stats() {
                 for c in "${!cbw_out[@]}"; do echo "${cbw_out[$c]}|$c"; done | sort -t'|' -k1 -nr | head -7 | while IFS='|' read -r bytes country; do
                     local pct=$((bytes * 100 / total_out))
                     local blen=$((pct / 8)); [ "$blen" -lt 1 ] && blen=1; [ "$blen" -gt 14 ] && blen=14
-                    local bfill=""; for ((i=0; i<blen; i++)); do bfill+="█"; done
+                    local bfill=$(printf '%*s' "$blen" '' | sed 's/ /█/g')
                     printf "${CYAN}║${NC} %-16.16s %3d%% ${YELLOW}%-14s${NC} (%9s)\033[K\n" "$country" "$pct" "$bfill" "$(format_bytes $bytes)"
                 done
             else
