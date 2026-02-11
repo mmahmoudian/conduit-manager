@@ -6481,6 +6481,16 @@ telegram_build_report() {
         report+=$'\n'
     fi
 
+    if [ "$MTPROTO_ENABLED" = "true" ] && is_mtproto_running; then
+        local _mt_t=$(get_mtproto_traffic)
+        local _mt_dl _mt_ul
+        read -r _mt_dl _mt_ul <<< "$_mt_t"
+        local mt_dl_fmt=$(format_bytes ${_mt_dl:-0})
+        local mt_ul_fmt=$(format_bytes ${_mt_ul:-0})
+        report+="📡 MTProxy: Running | ↓${mt_dl_fmt} ↑${mt_ul_fmt}"
+        report+=$'\n'
+    fi
+
     local total_restarts=0
     local restart_details=""
     for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
@@ -6498,7 +6508,7 @@ telegram_build_report() {
     local snap_file_peers="$INSTALL_DIR/traffic_stats/tracker_snapshot"
     if [ -s "$snap_file_peers" ]; then
         local top_peers
-        top_peers=$(awk -F'|' '{if($2!="") cnt[$2]++} END{for(c in cnt) print cnt[c]"|"c}' "$snap_file_peers" 2>/dev/null | sort -t'|' -k1 -nr | head -3)
+        top_peers=$(awk -F'|' '{if($2!="" && $4!="" && !seen[$4]++) cnt[$2]++} END{for(c in cnt) print cnt[c]"|"c}' "$snap_file_peers" 2>/dev/null | sort -t'|' -k1 -nr | head -3)
         if [ -n "$top_peers" ]; then
             report+="🗺 Top by peers:"
             report+=$'\n'
@@ -6528,11 +6538,11 @@ telegram_build_report() {
         fi
     fi
 
-    # Unique IPs from tracker_snapshot
-    local snapshot_file="$INSTALL_DIR/traffic_stats/tracker_snapshot"
-    if [ -s "$snapshot_file" ]; then
-        local active_clients=$(wc -l < "$snapshot_file" 2>/dev/null || echo 0)
-        report+="📡 Total lifetime IPs served: ${active_clients}"
+    # Unique IPs from cumulative_ips (lifetime record)
+    local ips_file="$INSTALL_DIR/traffic_stats/cumulative_ips"
+    if [ -s "$ips_file" ]; then
+        local lifetime_ips=$(wc -l < "$ips_file" 2>/dev/null || echo 0)
+        report+="📡 Total lifetime IPs served: ${lifetime_ips}"
         report+=$'\n'
     fi
 
@@ -7715,11 +7725,11 @@ build_report() {
     report+="👥 Clients: ${total_peers} connected, ${total_connecting} connecting"
     report+=$'\n'
 
-    # Active unique clients
-    local snapshot_file="$INSTALL_DIR/traffic_stats/tracker_snapshot"
-    if [ -s "$snapshot_file" ]; then
-        local active_clients=$(wc -l < "$snapshot_file" 2>/dev/null || echo 0)
-        report+="👤 Total lifetime IPs served: ${active_clients}"
+    # Unique IPs from cumulative_ips (lifetime record)
+    local ips_file="$INSTALL_DIR/traffic_stats/cumulative_ips"
+    if [ -s "$ips_file" ]; then
+        local lifetime_ips=$(wc -l < "$ips_file" 2>/dev/null || echo 0)
+        report+="👤 Total lifetime IPs served: ${lifetime_ips}"
         report+=$'\n'
     fi
 
@@ -7886,6 +7896,16 @@ build_report() {
         fi
     fi
 
+    if [ "$MTPROTO_ENABLED" = "true" ] && is_mtproto_running; then
+        local _mt_t=$(get_mtproto_traffic)
+        local _mt_dl _mt_ul
+        read -r _mt_dl _mt_ul <<< "$_mt_t"
+        local mt_dl_fmt=$(format_bytes ${_mt_dl:-0})
+        local mt_ul_fmt=$(format_bytes ${_mt_ul:-0})
+        report+="📡 MTProxy: Running | ↓${mt_dl_fmt} ↑${mt_ul_fmt}"
+        report+=$'\n'
+    fi
+
     local total_restarts=0
     local restart_details=""
     for i in $(seq 1 ${CONTAINER_COUNT:-1}); do
@@ -7903,7 +7923,7 @@ build_report() {
     local snap_file="$INSTALL_DIR/traffic_stats/tracker_snapshot"
     if [ -s "$snap_file" ]; then
         local top_peers
-        top_peers=$(awk -F'|' '{if($2!="") cnt[$2]++} END{for(c in cnt) print cnt[c]"|"c}' "$snap_file" 2>/dev/null | sort -t'|' -k1 -nr | head -3)
+        top_peers=$(awk -F'|' '{if($2!="" && $4!="" && !seen[$4]++) cnt[$2]++} END{for(c in cnt) print cnt[c]"|"c}' "$snap_file" 2>/dev/null | sort -t'|' -k1 -nr | head -3)
         if [ -n "$top_peers" ]; then
             report+="🗺 Top by peers:"
             report+=$'\n'
