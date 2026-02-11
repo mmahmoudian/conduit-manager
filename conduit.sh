@@ -11668,7 +11668,7 @@ SVCEOF
     if [ "$BATCH_MODE" != "true" ]; then
         read -p "Open management menu now? [Y/n] " open_menu < /dev/tty || true
         if [[ ! "$open_menu" =~ ^[Nn]$ ]]; then
-            "$INSTALL_DIR/conduit" menu
+            "$INSTALL_DIR/conduit" menu < /dev/tty
         fi
     fi
 }
