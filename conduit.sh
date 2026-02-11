@@ -8790,76 +8790,36 @@ SVCEOF
         systemctl restart conduit-telegram.service 2>/dev/null || true
     fi
 
-    # Background update check (non-blocking)
+    # Background update check (non-blocking) — compare commit SHA only (~40 bytes)
     {
         local _badge="/tmp/.conduit_update_available"
         local _sha_file="$INSTALL_DIR/.update_sha"
-        local _done=false
 
-        # Method 1: Lightweight GitHub API check (~40B vs ~530KB full file)
-        local _api_resp
-        _api_resp=$(curl -fsSL --connect-timeout 5 --max-time 10 \
+        # Fetch latest commit SHA from GitHub API
+        local _remote_sha
+        _remote_sha=$(curl -fsSL --connect-timeout 5 --max-time 10 \
             "https://api.github.com/repos/SamNet-dev/conduit-manager/commits/main" \
             -H "Accept: application/vnd.github.sha" 2>/dev/null) || true
-        if [ -n "$_api_resp" ] && [ ${#_api_resp} -ge 40 ]; then
-            local _remote_sha="${_api_resp:0:40}"
-            # Validate response is hex (not a JSON error or HTML from a proxy)
-            case "$_remote_sha" in *[!a-f0-9]*)
-                # Not a valid SHA, skip to Method 2
-                ;;
-            *)
-                local _stored_sha=""
-                [ -f "$_sha_file" ] && _stored_sha=$(<"$_sha_file")
-                if [ -z "$_stored_sha" ]; then
-                    # No SHA baseline (API was down during install/update) — fall through to Method 2
-                    :
-                elif [ "$_remote_sha" != "$_stored_sha" ]; then
-                    echo "new" > "$_badge" 2>/dev/null
-                    _done=true
-                else
-                    rm -f "$_badge" 2>/dev/null
-                    _done=true
-                fi
-                ;;
-            esac
-        fi
 
-        # Method 2: Full file hash comparison (fallback if API unreachable)
-        if [ "$_done" != "true" ]; then
-            local _utmp="/tmp/.conduit_uc_$$"
-            local _uurl="https://raw.githubusercontent.com/SamNet-dev/conduit-manager/main/conduit.sh"
-            local _hashcmd="md5sum"
-            command -v md5sum &>/dev/null || _hashcmd="sha256sum"
-            command -v $_hashcmd &>/dev/null || { rm -f "$_utmp"; exit 0; }
-            if curl -fsSL --connect-timeout 5 --max-time 30 -o "$_utmp" "$_uurl" 2>/dev/null && [ -s "$_utmp" ]; then
-                local _remote_hash=$($_hashcmd "$_utmp" | cut -d' ' -f1)
-                local _stored_hash=""
-                [ -f "$INSTALL_DIR/.update_hash" ] && _stored_hash=$(<"$INSTALL_DIR/.update_hash")
-                if [ -z "$_stored_hash" ]; then
-                    local _rv=$(grep -m1 '^VERSION=' "$_utmp" | cut -d'"' -f2)
-                    if [ -n "$_rv" ] && [ "$_rv" = "$VERSION" ]; then
-                        echo "$_remote_hash" > "$INSTALL_DIR/.update_hash" 2>/dev/null || true
-                        rm -f "$_badge" 2>/dev/null
-                    else
-                        if [ -n "$_rv" ]; then
-                            echo "v${_rv}" > "$_badge" 2>/dev/null
-                        else
-                            echo "new" > "$_badge" 2>/dev/null
-                        fi
-                    fi
-                elif [ "$_remote_hash" != "$_stored_hash" ]; then
-                    local _rv=$(grep -m1 '^VERSION=' "$_utmp" | cut -d'"' -f2)
-                    if [ -n "$_rv" ] && [ "$_rv" != "$VERSION" ]; then
-                        echo "v${_rv}" > "$_badge" 2>/dev/null
-                    else
-                        echo "new" > "$_badge" 2>/dev/null
-                    fi
-                else
-                    rm -f "$_badge" 2>/dev/null
-                fi
+        # Validate: must be 40+ hex chars (not JSON error or HTML from a proxy)
+        if [ -n "$_remote_sha" ] && [ ${#_remote_sha} -ge 40 ]; then
+            _remote_sha="${_remote_sha:0:40}"
+            case "$_remote_sha" in *[!a-f0-9]*) exit 0 ;; esac
+
+            local _stored_sha=""
+            [ -f "$_sha_file" ] && _stored_sha=$(<"$_sha_file")
+
+            if [ -z "$_stored_sha" ]; then
+                # No baseline yet — save current as baseline (first run after install/update where API was down)
+                echo "$_remote_sha" > "$_sha_file" 2>/dev/null || true
+                rm -f "$_badge" 2>/dev/null
+            elif [ "$_remote_sha" != "$_stored_sha" ]; then
+                echo "new" > "$_badge" 2>/dev/null
+            else
+                rm -f "$_badge" 2>/dev/null
             fi
-            rm -f "$_utmp"
         fi
+        # If API unreachable — do nothing, badge stays as-is
     } &
 
     local redraw=true
@@ -11155,7 +11115,6 @@ update_conduit() {
             # Install latest from GitHub
             bash "$tmp_script" --update-components
             local update_status=$?
-            rm -f "$tmp_script"
 
             if [ $update_status -eq 0 ]; then
                 echo -e "  ${GREEN}✓ Script installed (v${new_version:-?})${NC}"
@@ -11164,6 +11123,7 @@ update_conduit() {
             else
                 echo -e "  ${RED}✗ Installation failed${NC}"
             fi
+            rm -f "$tmp_script"
         else
             echo -e "  ${RED}✗ Downloaded file invalid or corrupted${NC}"
             rm -f "$tmp_script"
@@ -11256,11 +11216,15 @@ update_conduit() {
     # Clear update badge and save current commit SHA as baseline
     rm -f /tmp/.conduit_update_available
     local _cur_sha
-    _cur_sha=$(curl -fsSL --max-time 10 \
+    _cur_sha=$(curl -fsSL --connect-timeout 5 --max-time 10 \
         "https://api.github.com/repos/SamNet-dev/conduit-manager/commits/main" \
         -H "Accept: application/vnd.github.sha" 2>/dev/null) || true
     if [ -n "$_cur_sha" ] && [ ${#_cur_sha} -ge 40 ]; then
-        echo "${_cur_sha:0:40}" > "$INSTALL_DIR/.update_sha" 2>/dev/null || true
+        _cur_sha="${_cur_sha:0:40}"
+        case "$_cur_sha" in *[!a-f0-9]*) _cur_sha="" ;; esac
+    fi
+    if [ -n "$_cur_sha" ]; then
+        echo "$_cur_sha" > "$INSTALL_DIR/.update_sha" 2>/dev/null || true
     else
         rm -f "$INSTALL_DIR/.update_sha" 2>/dev/null || true
     fi
@@ -11377,21 +11341,17 @@ MANAGEMENT
     rm -f /usr/local/bin/conduit 2>/dev/null || true
     ln -s "$INSTALL_DIR/conduit" /usr/local/bin/conduit
 
-    # Save script fingerprint for update checking
-    if [ -n "$0" ] && [ -f "$0" ]; then
-        local _hcmd="md5sum"
-        command -v md5sum &>/dev/null || _hcmd="sha256sum"
-        if command -v $_hcmd &>/dev/null; then
-            $_hcmd "$0" 2>/dev/null | cut -d' ' -f1 > "$INSTALL_DIR/.update_hash" 2>/dev/null || true
-        fi
-    fi
     # Save current commit SHA as update baseline
     local _cur_sha
-    _cur_sha=$(curl -fsSL --max-time 10 \
+    _cur_sha=$(curl -fsSL --connect-timeout 5 --max-time 10 \
         "https://api.github.com/repos/SamNet-dev/conduit-manager/commits/main" \
         -H "Accept: application/vnd.github.sha" 2>/dev/null) || true
     if [ -n "$_cur_sha" ] && [ ${#_cur_sha} -ge 40 ]; then
-        echo "${_cur_sha:0:40}" > "$INSTALL_DIR/.update_sha" 2>/dev/null || true
+        _cur_sha="${_cur_sha:0:40}"
+        case "$_cur_sha" in *[!a-f0-9]*) _cur_sha="" ;; esac
+    fi
+    if [ -n "$_cur_sha" ]; then
+        echo "$_cur_sha" > "$INSTALL_DIR/.update_sha" 2>/dev/null || true
     else
         rm -f "$INSTALL_DIR/.update_sha" 2>/dev/null || true
     fi
