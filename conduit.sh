@@ -512,6 +512,8 @@ prompt_settings() {
         log_warn "Invalid input. Using default: ${rec_containers}"
         CONTAINER_COUNT=$rec_containers
     fi
+    
+    read -p "  Should we setup firewall (using UFW)? [y/N] " DO_SETUP_FIREWALL < /dev/tty || true
 
     echo ""
     echo -e "${CYAN}───────────────────────────────────────────────────────────────${NC}"
@@ -925,6 +927,66 @@ EOF
     else
         log_warn "Could not set up auto-start. Docker's restart policy will handle restarts."
         log_info "Container is set to restart unless-stopped, which works on reboot if Docker starts."
+    fi
+}
+
+setup_firewall() {
+    ## pre-installation preperation
+    if ! command -v ufw &>/dev/null; then
+        if [ "$OS_FAMILY" = "alpine" ]; then
+            install_package 'ip6tables'
+        fi
+        
+        install_package 'ufw'
+    fi
+
+    ## config
+    ufw default deny incoming
+    ufw default allow outgoing
+    # only enable ssh in firewall if the daemon is already running (useful for local VM and KVM)
+    if systemctl status sshd.service &> /dev/null; then
+        ufw allow ssh
+    fi
+
+    ## post-installation
+    if ! ufw enable 2>/dev/null; then
+        log_error "Couldn't enable UFW"
+    fi
+
+    if [ "$OS_FAMILY" = "alpine" ]; then
+        if ! meta_service add ufw 2> /dev/null; then
+            log_error "Couldn't add UFW to the list of services"
+        fi
+    fi
+}
+
+meta_service() {
+    if [ -d '/run/systemd/system' ]; then
+        systemctl "$1" "$2"
+        
+    elif [ -d '/usr/bin/openrc-init' ]; then
+        case "$1" in
+            status)
+                rc-service "$2" status
+                ;;
+            enable)
+                rc-update add "$2"
+                ;;
+            disable)
+                rc-update del "$2"
+                ;;
+            start)
+                rc-service "$2" start
+                ;;
+            stop)
+                rc-service "$2" stop
+                ;;
+            restart)
+                rc-service "$2" restart
+                ;;
+        esac
+    else
+        log_error 'Unknown init system!'
     fi
 }
 
@@ -11633,19 +11695,26 @@ SVCEOF
     echo -e "${CYAN}Starting installation...${NC}"
     echo ""
 
-    log_info "Step 1/5: Installing Docker..."
+    if [[ "$DO_SETUP_FIREWALL" =~ ^[Yy]$ ]]; then
+        log_info "Step 1/6: Setting up firewall (UFW)..."
+        setup_firewall
+    else
+        log_info "Step 1/6: Skipping setting up firewall (UFW)..."
+    fi
+
+    log_info "Step 2/6: Installing Docker..."
     install_docker
 
     echo ""
 
-    log_info "Step 2/5: Checking for previous node identity..."
+    log_info "Step 3/6: Checking for previous node identity..."
     if [ "$BATCH_MODE" != "true" ]; then
         check_and_offer_backup_restore || true
     fi
 
     echo ""
 
-    log_info "Step 3/5: Starting Conduit..."
+    log_info "Step 4/6: Starting Conduit..."
     docker ps -a --format '{{.Names}}' 2>/dev/null | while read -r name; do
         [[ "$name" =~ ^conduit(-[0-9]+)?$ ]] || continue
         docker stop "$name" 2>/dev/null || true
@@ -11655,7 +11724,7 @@ SVCEOF
     
     echo ""
 
-    log_info "Step 4/5: Setting up auto-start..."
+    log_info "Step 5/6: Setting up auto-start..."
     save_settings_install
     setup_autostart
     setup_tracker_service 2>/dev/null || true
@@ -11663,7 +11732,7 @@ SVCEOF
     echo ""
 
     # Create the 'conduit' CLI management script
-    log_info "Step 5/5: Creating management script..."
+    log_info "Step 6/6: Creating management script..."
     create_management_script
 
     print_summary
