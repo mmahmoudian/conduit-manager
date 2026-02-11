@@ -8756,10 +8756,24 @@ SVCEOF
             local _stored_hash=""
             [ -f "$INSTALL_DIR/.update_hash" ] && _stored_hash=$(<"$INSTALL_DIR/.update_hash")
             if [ -z "$_stored_hash" ]; then
-                # No stored hash (curl|bash install) — save baseline, no badge
-                echo "$_remote_hash" > "$INSTALL_DIR/.update_hash" 2>/dev/null || true
-                rm -f /tmp/.conduit_update_available
-            elif [ "$_remote_hash" != "$_stored_hash" ]; then
+                # No stored hash — check version to distinguish fresh vs old install
+                local _rv=$(grep -m1 '^VERSION=' "$_utmp" | cut -d'"' -f2)
+                if [ -n "$_rv" ] && [ "$_rv" = "$VERSION" ]; then
+                    # Same version = likely fresh install — save baseline, no badge
+                    echo "$_remote_hash" > "$INSTALL_DIR/.update_hash" 2>/dev/null || true
+                    rm -f /tmp/.conduit_update_available
+                else
+                    # Different version = old install without hash — show badge
+                    if [ -n "$_rv" ]; then
+                        echo "v${_rv}" > /tmp/.conduit_update_available
+                    else
+                        echo "new" > /tmp/.conduit_update_available
+                    fi
+                fi
+                rm -f "$_utmp"
+                exit 0
+            fi
+            if [ "$_remote_hash" != "$_stored_hash" ]; then
                 local _rv=$(grep -m1 '^VERSION=' "$_utmp" | cut -d'"' -f2)
                 if [ -n "$_rv" ] && [ "$_rv" != "$VERSION" ]; then
                     echo "v${_rv}" > /tmp/.conduit_update_available
